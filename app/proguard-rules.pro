@@ -1,0 +1,2 @@
+-keepclassmembers class com.trafficracer.game.** { *; }
+-keep class com.trafficracer.game.SoundManager { *; }
