@@ -45,6 +45,17 @@ class GameData(context: Context) {
         get() = prefs.getFloat("max_speed_ever", 0f)
         set(value) = prefs.edit().putFloat("max_speed_ever", value).apply()
 
+    var controlScheme: ControlScheme
+        get() {
+            val name = prefs.getString("control_scheme", ControlScheme.NFS.name) ?: ControlScheme.NFS.name
+            return try { ControlScheme.valueOf(name) } catch (_: Exception) { ControlScheme.NFS }
+        }
+        set(value) = prefs.edit().putString("control_scheme", value.name).apply()
+
+    var perspectiveEnabled: Boolean
+        get() = prefs.getBoolean("perspective_enabled", true)
+        set(value) = prefs.edit().putBoolean("perspective_enabled", value).apply()
+
     fun isCarUnlocked(carId: String): Boolean {
         if (carId == "starter") return true
         return prefs.getBoolean("car_unlocked_$carId", false)

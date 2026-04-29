@@ -16,10 +16,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private val renderer = GameRenderer(spriteManager)
     private var gameThread: GameThread? = null
 
-    // Multi-touch tracking
     private val pointerActions = mutableMapOf<Int, PointerAction>()
 
-    private enum class PointerAction { GAS, BRAKE, STEER, NOS, NONE }
+    private enum class PointerAction { GAS, BRAKE, STEER, NOS, LEFT, RIGHT, NONE }
 
     init {
         holder.addCallback(this)
@@ -46,7 +45,17 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         gameThread = null
     }
 
-    fun update(deltaTime: Float) { gameWorld.update(deltaTime) }
+    fun update(deltaTime: Float) {
+        // Auto-gas for SIMPLE and ARCADE schemes
+        if (gameWorld.state == GameState.PLAYING) {
+            when (gameWorld.controlScheme) {
+                ControlScheme.SIMPLE, ControlScheme.ARCADE -> gameWorld.setAccelerating(true)
+                ControlScheme.NFS -> {} // manual gas
+            }
+        }
+        gameWorld.update(deltaTime)
+    }
+
     fun render(canvas: Canvas) { renderer.render(canvas, gameWorld) }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -56,13 +65,13 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
                 GameState.START_SCREEN -> handleStartScreenTouch(event)
                 GameState.GARAGE -> handleGarageTouch(event)
                 GameState.MISSIONS_SCREEN -> handleMissionsTouch(event)
+                GameState.SETTINGS -> handleSettingsTouch(event)
                 GameState.GAME_OVER -> handleGameOverTouch(event)
             }
         } catch (_: Exception) {}
         return true
     }
 
-    // ---- NFS multi-touch controls ----
     private fun handleGameplayTouch(event: MotionEvent) {
         if (gameWorld.state == GameState.PAUSED) {
             if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_POINTER_UP) {
@@ -104,21 +113,29 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     private fun classifyTouch(x: Float, y: Float, areas: ControlAreas): PointerAction {
-        // Check pause button first
-        if (areas.pauseArea.contains(x, y)) {
-            gameWorld.pause(); return PointerAction.NONE
-        }
-        // NOS button
+        if (areas.pauseArea.contains(x, y)) { gameWorld.pause(); return PointerAction.NONE }
+
+        // NOS button (same for all schemes)
         val nosDist = sqrt((x - areas.nosCx) * (x - areas.nosCx) + (y - areas.nosCy) * (y - areas.nosCy))
         if (nosDist < areas.nosRadius) return PointerAction.NOS
-        // Brake pedal
-        if (areas.brake.contains(x, y)) return PointerAction.BRAKE
-        // Gas pedal
-        if (areas.gas.contains(x, y)) return PointerAction.GAS
-        // Steering zone
-        val controlsTop = gameWorld.screenHeight * (1f - Constants.HUD_CONTROLS_HEIGHT_RATIO)
-        if (y > controlsTop && x > areas.steerLeft && x < areas.steerRight) return PointerAction.STEER
-        return PointerAction.NONE
+
+        return when (areas.scheme) {
+            ControlScheme.NFS -> {
+                if (areas.brake.contains(x, y)) PointerAction.BRAKE
+                else if (areas.gas.contains(x, y)) PointerAction.GAS
+                else {
+                    val controlsTop = gameWorld.screenHeight * (1f - Constants.HUD_CONTROLS_HEIGHT_RATIO)
+                    if (y > controlsTop && x > areas.steerLeft && x < areas.steerRight) PointerAction.STEER
+                    else PointerAction.NONE
+                }
+            }
+            ControlScheme.SIMPLE, ControlScheme.ARCADE -> {
+                if (areas.leftButton.contains(x, y)) PointerAction.LEFT
+                else if (areas.rightButton.contains(x, y)) PointerAction.RIGHT
+                else if (areas.brakeZone.contains(x, y)) PointerAction.BRAKE
+                else PointerAction.NONE
+            }
+        }
     }
 
     private fun applyAction(action: PointerAction, x: Float, y: Float, areas: ControlAreas, isDown: Boolean) {
@@ -129,6 +146,8 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             PointerAction.STEER -> {
                 if (isDown) updateSteering(x, areas) else gameWorld.setSteering(0f)
             }
+            PointerAction.LEFT -> gameWorld.setSteering(if (isDown) -1f else 0f)
+            PointerAction.RIGHT -> gameWorld.setSteering(if (isDown) 1f else 0f)
             PointerAction.NONE -> {}
         }
     }
@@ -136,6 +155,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private fun updateSteering(x: Float, areas: ControlAreas) {
         val centerX = (areas.steerLeft + areas.steerRight) / 2f
         val halfWidth = (areas.steerRight - areas.steerLeft) / 2f
+        if (halfWidth < 1f) return
         val input = ((x - centerX) / halfWidth).coerceIn(-1f, 1f)
         gameWorld.setSteering(input)
     }
@@ -157,6 +177,38 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         if (abs(tx - cx) < btnW / 2 && abs(ty - garageY) < btnH) { gameWorld.state = GameState.GARAGE; return }
         val missY = gameWorld.screenHeight * 0.73f
         if (abs(tx - cx) < btnW / 2 && abs(ty - missY) < btnH) { gameWorld.state = GameState.MISSIONS_SCREEN; return }
+        val settingsY = gameWorld.screenHeight * 0.82f
+        if (abs(tx - cx) < btnW / 2 && abs(ty - settingsY) < btnH) { gameWorld.openSettings(); return }
+    }
+
+    private fun handleSettingsTouch(event: MotionEvent) {
+        if (event.actionMasked != MotionEvent.ACTION_UP) return
+        val tx = event.x; val ty = event.y
+        val sw = gameWorld.screenWidth; val sh = gameWorld.screenHeight
+        val btnW = sw * 0.5f; val btnH = sh * 0.06f
+
+        // Control scheme cards
+        val schemes = ControlScheme.entries
+        val cardH = sh * 0.13f; val cardW = sw * 0.88f; val startY = sh * 0.15f
+        for (i in schemes.indices) {
+            val cardTop = startY + i * (cardH + sh * 0.02f)
+            val cardLeft = (sw - cardW) / 2
+            if (tx > cardLeft && tx < cardLeft + cardW && ty > cardTop && ty < cardTop + cardH) {
+                gameWorld.applyControlScheme(schemes[i]); return
+            }
+        }
+
+        // Perspective toggle
+        val toggleY = startY + schemes.size * (cardH + sh * 0.02f) + sh * 0.04f
+        val perspY = toggleY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
+        val perspLeft = (sw - perspW) / 2
+        if (tx > perspLeft && tx < perspLeft + perspW && ty > perspY && ty < perspY + perspH) {
+            gameWorld.togglePerspective(); return
+        }
+
+        // Back button
+        val backY = sh * 0.87f
+        if (abs(tx - sw / 2) < btnW / 2 && abs(ty - backY) < btnH) { gameWorld.closeSettings(); return }
     }
 
     private fun handleGarageTouch(event: MotionEvent) {
@@ -165,14 +217,12 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val sw = gameWorld.screenWidth; val sh = gameWorld.screenHeight
         val btnW = sw * 0.5f; val btnH = sh * 0.06f
 
-        // Nav arrows
         val arrowY = sh * 0.28f
         if (ty > arrowY - sh * 0.1f && ty < arrowY + sh * 0.1f) {
             if (tx < sw * 0.2f && gameWorld.garageSelectedIndex > 0) { gameWorld.selectCar(gameWorld.garageSelectedIndex - 1); return }
             if (tx > sw * 0.8f && gameWorld.garageSelectedIndex < PlayerCarDef.ALL_CARS.size - 1) { gameWorld.selectCar(gameWorld.garageSelectedIndex + 1); return }
         }
 
-        // Action button
         val actionY = sh * 0.68f
         if (abs(tx - sw / 2) < btnW / 2 && abs(ty - actionY) < btnH) {
             val car = PlayerCarDef.ALL_CARS[gameWorld.garageSelectedIndex]
@@ -181,7 +231,6 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
             return
         }
 
-        // Back
         val backY = sh * 0.77f
         if (abs(tx - sw / 2) < btnW / 2 && abs(ty - backY) < btnH) { gameWorld.state = GameState.START_SCREEN; return }
     }
@@ -198,6 +247,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         gameWorld.state = GameState.START_SCREEN
     }
 
+    private fun openSettings() { gameWorld.openSettings() }
     fun onPause() { if (gameWorld.state == GameState.PLAYING) gameWorld.pause() }
     fun onDestroy() { gameWorld.release(); spriteManager.release() }
 

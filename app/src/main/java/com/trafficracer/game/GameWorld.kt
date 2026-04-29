@@ -47,6 +47,8 @@ class GameWorld(private val context: Context) {
     var currentMissions: List<MissionDef> = emptyList()
     val missionProgress = mutableMapOf<String, Int>()
     var newAchievements = mutableListOf<AchievementDef>()
+    var controlScheme: ControlScheme = ControlScheme.NFS
+    var perspectiveEnabled: Boolean = true
 
     private var screenShakeEndTime: Long = 0
     private var lastTrafficSpawn: Long = 0
@@ -73,6 +75,8 @@ class GameWorld(private val context: Context) {
         soundManager = SoundManager(context)
         currentMissions = MissionBank.generateMissions(gameData.missionDifficulty)
         garageSelectedIndex = PlayerCarDef.ALL_CARS.indexOfFirst { it.id == gameData.selectedCarId }.coerceAtLeast(0)
+        controlScheme = gameData.controlScheme
+        perspectiveEnabled = gameData.perspectiveEnabled
 
         initRoadMarkings()
         initScenery()
@@ -333,7 +337,7 @@ class GameWorld(private val context: Context) {
                 width = baseW * type.widthMult, height = baseH * type.heightMult,
                 speed = spd, laneIndex = lane, type = type,
                 color = trafficColors[Random.nextInt(trafficColors.size)], isOncoming = isOncoming,
-                spriteIndex = Random.nextInt(12)
+                spriteIndex = Random.nextInt(22)
             ))
         }
         if (Random.nextFloat() < Constants.COIN_SPAWN_CHANCE) spawnCoin()
@@ -712,5 +716,16 @@ class GameWorld(private val context: Context) {
         if (gameData.spendCoins(gameData.getUpgradeCost(lvl))) { gameData.setCarUpgradeLevel(car.id, stat, lvl + 1); return true }
         return false
     }
+    fun openSettings() { state = GameState.SETTINGS }
+    fun closeSettings() { state = GameState.START_SCREEN }
+    fun applyControlScheme(scheme: ControlScheme) {
+        controlScheme = scheme
+        gameData.controlScheme = scheme
+    }
+    fun togglePerspective() {
+        perspectiveEnabled = !perspectiveEnabled
+        gameData.perspectiveEnabled = perspectiveEnabled
+    }
+
     fun release() { soundManager?.release() }
 }

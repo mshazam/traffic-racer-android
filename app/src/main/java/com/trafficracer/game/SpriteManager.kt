@@ -10,17 +10,40 @@ class SpriteManager(private val context: Context) {
     private val scaledCache = mutableMapOf<String, Bitmap>()
 
     val playerSprites = mapOf(
-        "street_racer" to "sprites/cars/player_default.png",
-        "sprint" to "sprites/cars/player_sprint.png",
-        "muscle" to "sprites/cars/player_muscle.png",
-        "turbo" to "sprites/cars/player_turbo.png",
+        "starter" to "sprites/cars/player_default.png",
+        "blue_bolt" to "sprites/cars/player_sprint.png",
+        "viper" to "sprites/cars/player_venom.png",
         "phantom" to "sprites/cars/player_phantom.png",
-        "blaze" to "sprites/cars/player_blaze.png",
-        "venom" to "sprites/cars/player_venom.png",
-        "thunder" to "sprites/cars/player_thunder.png"
+        "golden_fury" to "sprites/cars/player_blaze.png",
+        "shadow" to "sprites/cars/player_muscle.png",
+        "inferno" to "sprites/cars/player_turbo.png",
+        "arctic" to "sprites/cars/player_thunder.png"
     )
 
-    val trafficSprites = (0..7).map { "sprites/cars/traffic_$it.png" }
+    val trafficSprites = listOf(
+        "sprites/cars/traffic_0.png",
+        "sprites/cars/traffic_1.png",
+        "sprites/cars/traffic_2.png",
+        "sprites/cars/traffic_3.png",
+        "sprites/cars/traffic_4.png",
+        "sprites/cars/traffic_5.png",
+        "sprites/cars/traffic_6.png",
+        "sprites/cars/traffic_7.png",
+        "sprites/cars/traffic_sedan.png",
+        "sprites/cars/traffic_taxi.png",
+        "sprites/cars/traffic_police.png",
+        "sprites/cars/traffic_ambulance.png"
+    )
+
+    val trafficLargeSprites = listOf(
+        "sprites/cars/traffic_bus.png",
+        "sprites/cars/traffic_truck.png",
+        "sprites/cars/traffic_van.png",
+        "sprites/cars/traffic_suv.png",
+        "sprites/cars/traffic_firetruck.png",
+        "sprites/cars/traffic_transport.png"
+    )
+
     val trafficSmallSprites = (0..3).map { "sprites/cars/traffic_small_$it.png" }
 
     val objectSprites = mapOf(
@@ -34,6 +57,7 @@ class SpriteManager(private val context: Context) {
     fun preload() {
         playerSprites.values.forEach { load(it) }
         trafficSprites.forEach { load(it) }
+        trafficLargeSprites.forEach { load(it) }
         trafficSmallSprites.forEach { load(it) }
         objectSprites.values.forEach { load(it) }
     }
@@ -72,8 +96,13 @@ class SpriteManager(private val context: Context) {
     }
 
     fun getTrafficSprite(index: Int): String {
-        return if (index < trafficSprites.size) trafficSprites[index]
-        else trafficSmallSprites.getOrElse(index - trafficSprites.size) { trafficSprites[0] }
+        val allTraffic = trafficSprites + trafficLargeSprites + trafficSmallSprites
+        return allTraffic.getOrElse(index % allTraffic.size) { trafficSprites[0] }
+    }
+
+    fun isLargeVehicle(index: Int): Boolean {
+        val offset = trafficSprites.size
+        return index in offset until (offset + trafficLargeSprites.size)
     }
 
     fun release() {

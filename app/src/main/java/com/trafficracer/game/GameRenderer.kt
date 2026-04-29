@@ -1,6 +1,7 @@
 package com.trafficracer.game
 
 import android.graphics.Bitmap
+import android.graphics.Camera
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -26,6 +27,8 @@ class GameRenderer(private val spriteManager: SpriteManager) {
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val spriteMatrix = Matrix()
+    private val perspCamera = Camera()
+    private val perspMatrix = Matrix()
 
     fun render(canvas: Canvas, world: GameWorld) {
         try { renderInternal(canvas, world) } catch (_: Exception) {}
@@ -36,25 +39,64 @@ class GameRenderer(private val spriteManager: SpriteManager) {
         canvas.translate(world.screenShakeX, world.screenShakeY)
 
         val env = world.currentEnvironment
-        drawSky(canvas, world, env)
-        drawGrass(canvas, world, env)
-        drawRoad(canvas, world, env)
-        drawRoadMarkings(canvas, world, env)
-        drawScenery(canvas, world, env)
-        drawTireTrails(canvas, world)
-        drawHazards(canvas, world)
-        drawMysteryBoxes(canvas, world)
-        drawCoins(canvas, world)
-        drawPowerUps(canvas, world)
-        drawTraffic(canvas, world)
-        drawDriftSparks(canvas, world)
-        drawPlayer(canvas, world)
-        drawParticles(canvas, world)
-        drawWeather(canvas, world)
-        drawFloatingTexts(canvas, world)
 
-        if (world.player.getEffectiveSpeed() > Constants.SPEED_BLUR_THRESHOLD) drawSpeedLines(canvas, world)
-        if (world.slowMoFactor < 0.9f) drawSlowMoOverlay(canvas, world)
+        if (world.perspectiveEnabled && world.state == GameState.PLAYING) {
+            // Draw sky flat (before perspective)
+            drawSky(canvas, world, env)
+
+            // Apply 3D perspective tilt
+            canvas.save()
+            perspCamera.save()
+            perspCamera.setLocation(0f, 0f, -12f)
+            perspCamera.rotateX(28f) // tilt angle for road perspective
+            perspCamera.getMatrix(perspMatrix)
+            perspCamera.restore()
+            // Pivot at bottom center of screen
+            perspMatrix.preTranslate(-world.screenWidth / 2f, -world.screenHeight)
+            perspMatrix.postTranslate(world.screenWidth / 2f, world.screenHeight * 1.02f)
+            canvas.concat(perspMatrix)
+
+            drawGrass(canvas, world, env)
+            drawRoad(canvas, world, env)
+            drawRoadMarkings(canvas, world, env)
+            drawScenery(canvas, world, env)
+            drawTireTrails(canvas, world)
+            drawHazards(canvas, world)
+            drawMysteryBoxes(canvas, world)
+            drawCoins(canvas, world)
+            drawPowerUps(canvas, world)
+            drawTraffic(canvas, world)
+            drawDriftSparks(canvas, world)
+            drawPlayer(canvas, world)
+            drawParticles(canvas, world)
+            drawWeather(canvas, world)
+            drawFloatingTexts(canvas, world)
+
+            if (world.player.getEffectiveSpeed() > Constants.SPEED_BLUR_THRESHOLD) drawSpeedLines(canvas, world)
+            if (world.slowMoFactor < 0.9f) drawSlowMoOverlay(canvas, world)
+
+            canvas.restore() // restore perspective
+        } else {
+            drawSky(canvas, world, env)
+            drawGrass(canvas, world, env)
+            drawRoad(canvas, world, env)
+            drawRoadMarkings(canvas, world, env)
+            drawScenery(canvas, world, env)
+            drawTireTrails(canvas, world)
+            drawHazards(canvas, world)
+            drawMysteryBoxes(canvas, world)
+            drawCoins(canvas, world)
+            drawPowerUps(canvas, world)
+            drawTraffic(canvas, world)
+            drawDriftSparks(canvas, world)
+            drawPlayer(canvas, world)
+            drawParticles(canvas, world)
+            drawWeather(canvas, world)
+            drawFloatingTexts(canvas, world)
+
+            if (world.player.getEffectiveSpeed() > Constants.SPEED_BLUR_THRESHOLD) drawSpeedLines(canvas, world)
+            if (world.slowMoFactor < 0.9f) drawSlowMoOverlay(canvas, world)
+        }
 
         canvas.restore()
 
@@ -63,6 +105,7 @@ class GameRenderer(private val spriteManager: SpriteManager) {
             GameState.START_SCREEN -> drawStartScreen(canvas, world)
             GameState.GARAGE -> drawGarageScreen(canvas, world)
             GameState.MISSIONS_SCREEN -> drawMissionsScreen(canvas, world)
+            GameState.SETTINGS -> drawSettingsScreen(canvas, world)
             GameState.GAME_OVER -> drawGameOverScreen(canvas, world)
             GameState.PAUSED -> { drawHUD(canvas, world); drawControls(canvas, world); drawPauseOverlay(canvas, world) }
         }
@@ -590,92 +633,111 @@ class GameRenderer(private val spriteManager: SpriteManager) {
         canvas.drawText("NOS", cx, nosY + nosBarH * 0.72f, textPaint)
     }
 
-    // ---- Polished Controls ----
+    // ---- Controls per scheme ----
     fun drawControls(canvas: Canvas, world: GameWorld) {
-        val sw = world.screenWidth; val sh = world.screenHeight
+        when (world.controlScheme) {
+            ControlScheme.NFS -> drawControlsNFS(canvas, world)
+            ControlScheme.SIMPLE -> drawControlsSimple(canvas, world)
+            ControlScheme.ARCADE -> drawControlsArcade(canvas, world)
+        }
+    }
+
+    private fun drawControlsBg(canvas: Canvas, sw: Float, sh: Float): Pair<Float, Float> {
         val controlsTop = sh * (1f - Constants.HUD_CONTROLS_HEIGHT_RATIO)
         val controlsH = sh * Constants.HUD_CONTROLS_HEIGHT_RATIO
-
-        // Subtle gradient background for control area
         paint.shader = LinearGradient(0f, controlsTop, 0f, sh, 0x11000000, 0x33000000, Shader.TileMode.CLAMP)
-        canvas.drawRect(0f, controlsTop, sw, sh, paint)
-        paint.shader = null
+        canvas.drawRect(0f, controlsTop, sw, sh, paint); paint.shader = null
+        return Pair(controlsTop, controlsH)
+    }
 
-        // Brake pedal (left)
-        val brakeW = sw * Constants.PEDAL_WIDTH_RATIO
-        val brakeH = controlsH * 0.72f
+    private fun drawControlsNFS(canvas: Canvas, world: GameWorld) {
+        val sw = world.screenWidth; val sh = world.screenHeight
+        val (controlsTop, controlsH) = drawControlsBg(canvas, sw, sh)
+
+        val brakeW = sw * Constants.PEDAL_WIDTH_RATIO; val brakeH = controlsH * 0.72f
         val brakeX = sw * 0.02f; val brakeY = controlsTop + (controlsH - brakeH) / 2
-        val brakeActive = world.player.isBraking
         drawPedal(canvas, brakeX, brakeY, brakeW, brakeH, "BRAKE",
-            if (brakeActive) 0xDDFF1744.toInt() else 0x55FF5252.toInt(),
-            if (brakeActive) 0xFFFF1744.toInt() else 0x88FF5252.toInt())
+            if (world.player.isBraking) 0xDDFF1744.toInt() else 0x55FF5252.toInt(),
+            if (world.player.isBraking) 0xFFFF1744.toInt() else 0x88FF5252.toInt())
 
-        // Gas pedal (right)
-        val gasW = sw * Constants.PEDAL_WIDTH_RATIO
-        val gasH = controlsH * 0.72f
+        val gasW = sw * Constants.PEDAL_WIDTH_RATIO; val gasH = controlsH * 0.72f
         val gasX = sw - sw * 0.02f - gasW; val gasY = controlsTop + (controlsH - gasH) / 2
-        val gasActive = world.player.isAccelerating
         drawPedal(canvas, gasX, gasY, gasW, gasH, "GAS",
-            if (gasActive) 0xDD00E676.toInt() else 0x5569F0AE.toInt(),
-            if (gasActive) 0xFF00E676.toInt() else 0x8869F0AE.toInt())
+            if (world.player.isAccelerating) 0xDD00E676.toInt() else 0x5569F0AE.toInt(),
+            if (world.player.isAccelerating) 0xFF00E676.toInt() else 0x8869F0AE.toInt())
 
-        // Steering zone
-        val steerLeft = brakeX + brakeW + sw * 0.03f
-        val steerRight = gasX - sw * 0.03f
-        val steerCx = (steerLeft + steerRight) / 2
-        val steerCy = controlsTop + controlsH / 2
+        val steerLeft = brakeX + brakeW + sw * 0.03f; val steerRight = gasX - sw * 0.03f
+        val steerCx = (steerLeft + steerRight) / 2; val steerCy = controlsTop + controlsH / 2
         val steerRadius = controlsH * 0.30f
-
-        // Steering wheel outline
         paint.color = 0x33FFFFFF; paint.style = Paint.Style.STROKE; paint.strokeWidth = 3f
-        canvas.drawCircle(steerCx, steerCy, steerRadius, paint)
-        paint.style = Paint.Style.FILL
-
-        // Steering dot
+        canvas.drawCircle(steerCx, steerCy, steerRadius, paint); paint.style = Paint.Style.FILL
         val steerX = steerCx + world.player.steerAngle / Constants.MAX_STEER_ANGLE * steerRadius * 0.8f
         paint.shader = RadialGradient(steerX, steerCy, steerRadius * 0.25f, 0xEEFFFFFF.toInt(), 0x88AAAAAA.toInt(), Shader.TileMode.CLAMP)
-        canvas.drawCircle(steerX, steerCy, steerRadius * 0.22f, paint)
-        paint.shader = null
-
-        // Direction arrows
+        canvas.drawCircle(steerX, steerCy, steerRadius * 0.22f, paint); paint.shader = null
         textPaint.textSize = controlsH * 0.17f; textPaint.color = 0x55FFFFFF.toInt(); textPaint.textAlign = Paint.Align.CENTER
-        canvas.drawText("◀", steerLeft + 15f, steerCy + controlsH * 0.06f, textPaint)
-        canvas.drawText("▶", steerRight - 15f, steerCy + controlsH * 0.06f, textPaint)
+        canvas.drawText("\u25C0", steerLeft + 15f, steerCy + controlsH * 0.06f, textPaint)
+        canvas.drawText("\u25B6", steerRight - 15f, steerCy + controlsH * 0.06f, textPaint)
 
-        // NOS button
-        val nosSize = sw * Constants.NOS_BUTTON_SIZE_RATIO
-        val nosCx = gasX - nosSize * 0.8f; val nosCy = controlsTop + controlsH * 0.35f
-        val nosActive = world.player.nosActive
-        val canActivate = world.player.nosAmount >= Constants.NOS_MIN_TO_ACTIVATE
+        drawNOSButton(canvas, world, controlsTop, controlsH)
+    }
 
+    private fun drawControlsSimple(canvas: Canvas, world: GameWorld) {
+        val sw = world.screenWidth; val sh = world.screenHeight
+        val (controlsTop, controlsH) = drawControlsBg(canvas, sw, sh)
+        val btnW = sw * 0.22f; val btnH = controlsH * 0.65f; val btnY = controlsTop + (controlsH - btnH) / 2
+        drawPedal(canvas, sw * 0.03f, btnY, btnW, btnH, "\u25C0 LEFT",
+            if (world.player.steerAngle < -0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
+            if (world.player.steerAngle < -0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
+        drawPedal(canvas, sw - sw * 0.03f - btnW, btnY, btnW, btnH, "RIGHT \u25B6",
+            if (world.player.steerAngle > 0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
+            if (world.player.steerAngle > 0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFF00E676.toInt(); textPaint.textSize = controlsH * 0.14f
+        canvas.drawText("AUTO GAS", sw / 2, controlsTop + controlsH * 0.25f, textPaint)
+        textPaint.color = if (world.player.isBraking) 0xFFFF1744.toInt() else 0x66FFFFFF.toInt(); textPaint.textSize = controlsH * 0.12f
+        canvas.drawText(if (world.player.isBraking) "BRAKING" else "Tap center to brake", sw / 2, controlsTop + controlsH * 0.45f, textPaint)
+        drawNOSButton(canvas, world, controlsTop, controlsH)
+    }
+
+    private fun drawControlsArcade(canvas: Canvas, world: GameWorld) {
+        val sw = world.screenWidth; val sh = world.screenHeight
+        val (controlsTop, controlsH) = drawControlsBg(canvas, sw, sh)
+        val btnW = sw * 0.22f; val btnH = controlsH * 0.65f; val btnY = controlsTop + (controlsH - btnH) / 2
+        drawPedal(canvas, sw * 0.03f, btnY, btnW, btnH, "\u25C0 LEFT",
+            if (world.player.steerAngle < -0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
+            if (world.player.steerAngle < -0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
+        drawPedal(canvas, sw - sw * 0.03f - btnW, btnY, btnW, btnH, "RIGHT \u25B6",
+            if (world.player.steerAngle > 0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
+            if (world.player.steerAngle > 0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFF00E676.toInt(); textPaint.textSize = controlsH * 0.14f
+        canvas.drawText("AUTO GAS", sw / 2, controlsTop + controlsH * 0.25f, textPaint)
+        textPaint.color = if (world.player.isBraking) 0xFFFF1744.toInt() else 0x66FFFFFF.toInt(); textPaint.textSize = controlsH * 0.12f
+        canvas.drawText(if (world.player.isBraking) "BRAKING" else "Tap center to brake", sw / 2, controlsTop + controlsH * 0.45f, textPaint)
+        drawNOSButton(canvas, world, controlsTop, controlsH)
+    }
+
+    private fun drawNOSButton(canvas: Canvas, world: GameWorld, controlsTop: Float, controlsH: Float) {
+        val sw = world.screenWidth; val nosSize = sw * Constants.NOS_BUTTON_SIZE_RATIO
+        val nosCx = sw / 2f; val nosCy = controlsTop + controlsH * 0.75f
+        val nosActive = world.player.nosActive; val canActivate = world.player.nosAmount >= Constants.NOS_MIN_TO_ACTIVATE
         if (nosActive) {
-            // Active glow
             paint.color = 0x2200E5FF; canvas.drawCircle(nosCx, nosCy, nosSize * 1.5f, paint)
             paint.color = 0xFF00E5FF.toInt(); canvas.drawCircle(nosCx, nosCy, nosSize, paint)
         } else {
-            paint.color = if (canActivate) 0x882979FF.toInt() else 0x33444444
-            canvas.drawCircle(nosCx, nosCy, nosSize, paint)
+            paint.color = if (canActivate) 0x882979FF.toInt() else 0x33444444; canvas.drawCircle(nosCx, nosCy, nosSize, paint)
         }
-        // NOS ring
         paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
         paint.color = if (nosActive) 0xFF00E5FF.toInt() else if (canActivate) 0x992979FF.toInt() else 0x33666666
-        canvas.drawCircle(nosCx, nosCy, nosSize, paint)
-        paint.style = Paint.Style.FILL
-        textPaint.color = Color.WHITE; textPaint.textSize = nosSize * 0.5f
+        canvas.drawCircle(nosCx, nosCy, nosSize, paint); paint.style = Paint.Style.FILL
+        textPaint.color = Color.WHITE; textPaint.textSize = nosSize * 0.5f; textPaint.textAlign = Paint.Align.CENTER
         canvas.drawText("NOS", nosCx, nosCy + nosSize * 0.16f, textPaint)
     }
 
     private fun drawPedal(canvas: Canvas, x: Float, y: Float, w: Float, h: Float, label: String, fillColor: Int, borderColor: Int) {
         val cr = min(w, h) * 0.15f
-        // Shadow
         paint.color = 0x22000000; canvas.drawRoundRect(RectF(x + 2f, y + 2f, x + w + 2f, y + h + 2f), cr, cr, paint)
-        // Fill
         paint.color = fillColor; canvas.drawRoundRect(RectF(x, y, x + w, y + h), cr, cr, paint)
-        // Border
         paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = borderColor
-        canvas.drawRoundRect(RectF(x, y, x + w, y + h), cr, cr, paint)
-        paint.style = Paint.Style.FILL
-        // Label
+        canvas.drawRoundRect(RectF(x, y, x + w, y + h), cr, cr, paint); paint.style = Paint.Style.FILL
         textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = h * 0.15f; textPaint.color = Color.WHITE
         canvas.drawText(label, x + w / 2, y + h * 0.55f, textPaint)
     }
@@ -683,22 +745,33 @@ class GameRenderer(private val spriteManager: SpriteManager) {
     fun getControlAreas(world: GameWorld): ControlAreas {
         val sw = world.screenWidth; val sh = world.screenHeight
         val ct = sh * (1f - Constants.HUD_CONTROLS_HEIGHT_RATIO); val ch = sh * Constants.HUD_CONTROLS_HEIGHT_RATIO
-        val bw = sw * Constants.PEDAL_WIDTH_RATIO; val bh = ch * 0.72f
-        val bx = sw * 0.02f; val by = ct + (ch - bh) / 2
-        val gw = sw * Constants.PEDAL_WIDTH_RATIO; val gh = ch * 0.72f
-        val gx = sw - sw * 0.02f - gw; val gy = ct + (ch - gh) / 2
-        val sl = bx + bw + sw * 0.03f; val sr = gx - sw * 0.03f
+        val hh = sh * 0.058f; val ps = hh * 0.35f; val px = sw - sw * 0.025f - ps * 1.2f
         val ns = sw * Constants.NOS_BUTTON_SIZE_RATIO
-        val nx = gx - ns * 0.8f; val ny = ct + ch * 0.35f
-        val hh = sh * 0.058f
-        val ps = hh * 0.35f; val px = sw - sw * 0.025f - ps * 1.2f
-        return ControlAreas(
-            brake = RectF(bx, by, bx + bw, by + bh),
-            gas = RectF(gx, gy, gx + gw, gy + gh),
-            steerLeft = sl, steerRight = sr, steerCy = ct + ch / 2,
-            nosCx = nx, nosCy = ny, nosRadius = ns * 1.5f,
-            pauseArea = RectF(px - ps * 2f, 0f, px + ps * 2f, hh)
-        )
+        val nosCx = sw / 2f; val nosCy = ct + ch * 0.75f
+        val pauseR = RectF(px - ps * 2f, 0f, px + ps * 2f, hh)
+
+        return when (world.controlScheme) {
+            ControlScheme.NFS -> {
+                val bw = sw * Constants.PEDAL_WIDTH_RATIO; val bh = ch * 0.72f
+                val bx = sw * 0.02f; val by = ct + (ch - bh) / 2
+                val gw = sw * Constants.PEDAL_WIDTH_RATIO; val gh = ch * 0.72f
+                val gx = sw - sw * 0.02f - gw; val gy = ct + (ch - gh) / 2
+                ControlAreas(brake = RectF(bx, by, bx + bw, by + bh), gas = RectF(gx, gy, gx + gw, gy + gh),
+                    steerLeft = bx + bw + sw * 0.03f, steerRight = gx - sw * 0.03f, steerCy = ct + ch / 2,
+                    nosCx = nosCx, nosCy = nosCy, nosRadius = ns * 1.5f, pauseArea = pauseR,
+                    leftButton = RectF(), rightButton = RectF(), brakeZone = RectF(), scheme = ControlScheme.NFS)
+            }
+            ControlScheme.SIMPLE, ControlScheme.ARCADE -> {
+                val btnW = sw * 0.22f; val btnH = ch * 0.65f; val btnY = ct + (ch - btnH) / 2
+                ControlAreas(brake = RectF(), gas = RectF(),
+                    steerLeft = 0f, steerRight = 0f, steerCy = 0f,
+                    nosCx = nosCx, nosCy = nosCy, nosRadius = ns * 1.5f, pauseArea = pauseR,
+                    leftButton = RectF(sw * 0.03f, btnY, sw * 0.03f + btnW, btnY + btnH),
+                    rightButton = RectF(sw - sw * 0.03f - btnW, btnY, sw - sw * 0.03f, btnY + btnH),
+                    brakeZone = RectF(sw * 0.03f + btnW, ct, sw - sw * 0.03f - btnW, sh),
+                    scheme = world.controlScheme)
+            }
+        }
     }
 
     private fun drawActivePowerUps(canvas: Canvas, world: GameWorld, hh: Float) {
@@ -792,14 +865,18 @@ class GameRenderer(private val spriteManager: SpriteManager) {
         val missY = sh * 0.73f
         drawMenuButton(canvas, sw / 2, missY, btnW, btnH, "MISSIONS", 0xFFFF6F00.toInt(), 0xFFE65100.toInt())
 
+        // Settings
+        val settingsY = sh * 0.82f
+        drawMenuButton(canvas, sw / 2, settingsY, btnW, btnH, "SETTINGS", 0xFF546E7A.toInt(), 0xFF37474F.toInt())
+
         // Stats
         textPaint.textSize = sw * 0.033f; textPaint.color = 0x99FFFFFF.toInt()
-        canvas.drawText("High Score: ${world.gameData.highScore}", sw / 2, sh * 0.83f, textPaint)
+        canvas.drawText("High Score: ${world.gameData.highScore}", sw / 2, sh * 0.90f, textPaint)
         textPaint.color = 0xFFFFD700.toInt()
-        canvas.drawText("Coins: ${world.gameData.totalCoins}", sw / 2, sh * 0.875f, textPaint)
+        canvas.drawText("Coins: ${world.gameData.totalCoins}", sw / 2, sh * 0.935f, textPaint)
 
         textPaint.color = 0x55FFFFFF.toInt(); textPaint.textSize = sw * 0.025f
-        canvas.drawText("Steer  •  Gas  •  Brake  •  NOS  •  Drift", sw / 2, sh * 0.95f, textPaint)
+        canvas.drawText("Steer  •  Gas  •  Brake  •  NOS  •  Drift", sw / 2, sh * 0.97f, textPaint)
     }
 
     private fun drawMenuButton(canvas: Canvas, cx: Float, cy: Float, w: Float, h: Float, text: String, color: Int, darkColor: Int) {
@@ -986,6 +1063,81 @@ class GameRenderer(private val spriteManager: SpriteManager) {
         drawMenuButton(canvas, sw / 2, sh * 0.55f, sw * 0.48f, sh * 0.06f, "RESUME", 0xFF4CAF50.toInt(), 0xFF388E3C.toInt())
     }
 
+    // ---- Settings Screen ----
+    fun drawSettingsScreen(canvas: Canvas, world: GameWorld) {
+        paint.shader = LinearGradient(0f, 0f, 0f, world.screenHeight, 0xFF0D1B2A.toInt(), 0xFF1A1A2E.toInt(), Shader.TileMode.CLAMP)
+        canvas.drawRect(0f, 0f, world.screenWidth, world.screenHeight, paint); paint.shader = null
+
+        val sw = world.screenWidth; val sh = world.screenHeight
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFF42A5F5.toInt(); textPaint.textSize = sw * 0.07f
+        canvas.drawText("SETTINGS", sw / 2, sh * 0.06f, textPaint)
+
+        // Control scheme section
+        textPaint.color = 0xFFFF6F00.toInt(); textPaint.textSize = sw * 0.04f
+        canvas.drawText("CONTROL SCHEME", sw / 2, sh * 0.12f, textPaint)
+
+        val schemes = ControlScheme.entries
+        val cardH = sh * 0.13f; val cardW = sw * 0.88f; val startY = sh * 0.15f
+        for (i in schemes.indices) {
+            val scheme = schemes[i]; val cy = startY + i * (cardH + sh * 0.02f)
+            val selected = world.controlScheme == scheme
+            val cardLeft = (sw - cardW) / 2; val cardTop = cy; val cardBottom = cy + cardH; val cr = 12f
+
+            // Card background
+            paint.color = if (selected) 0x552979FF else 0x33263238
+            canvas.drawRoundRect(RectF(cardLeft, cardTop, cardLeft + cardW, cardBottom), cr, cr, paint)
+            // Selection border
+            if (selected) {
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = 2.5f; paint.color = 0xFF2979FF.toInt()
+                canvas.drawRoundRect(RectF(cardLeft, cardTop, cardLeft + cardW, cardBottom), cr, cr, paint)
+                paint.style = Paint.Style.FILL
+            }
+
+            // Radio circle
+            val radioX = cardLeft + sw * 0.06f; val radioY = cardTop + cardH / 2
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = if (selected) 0xFF2979FF.toInt() else 0x88FFFFFF.toInt()
+            canvas.drawCircle(radioX, radioY, sw * 0.02f, paint); paint.style = Paint.Style.FILL
+            if (selected) { paint.color = 0xFF2979FF.toInt(); canvas.drawCircle(radioX, radioY, sw * 0.012f, paint) }
+
+            // Scheme name
+            textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.04f
+            textPaint.color = if (selected) 0xFFFFFFFF.toInt() else 0xDDFFFFFF.toInt()
+            canvas.drawText(scheme.displayName, cardLeft + sw * 0.11f, cardTop + cardH * 0.4f, textPaint)
+            // Description
+            textPaint.textSize = sw * 0.025f; textPaint.color = 0x99FFFFFF.toInt()
+            canvas.drawText(scheme.description, cardLeft + sw * 0.11f, cardTop + cardH * 0.7f, textPaint)
+        }
+
+        // Perspective toggle
+        val toggleY = startY + schemes.size * (cardH + sh * 0.02f) + sh * 0.04f
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFFFF6F00.toInt(); textPaint.textSize = sw * 0.04f
+        canvas.drawText("CAMERA", sw / 2, toggleY, textPaint)
+
+        val perspY = toggleY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
+        val perspLeft = (sw - perspW) / 2
+        paint.color = if (world.perspectiveEnabled) 0x552979FF else 0x33263238
+        canvas.drawRoundRect(RectF(perspLeft, perspY, perspLeft + perspW, perspY + perspH), 12f, 12f, paint)
+        if (world.perspectiveEnabled) {
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = 0xFF2979FF.toInt()
+            canvas.drawRoundRect(RectF(perspLeft, perspY, perspLeft + perspW, perspY + perspH), 12f, 12f, paint)
+            paint.style = Paint.Style.FILL
+        }
+        // Toggle
+        val toggleX = perspLeft + perspW - sw * 0.08f; val toggleCy = perspY + perspH / 2
+        val toggleW = sw * 0.06f; val toggleH2 = perspH * 0.35f
+        paint.color = if (world.perspectiveEnabled) 0xFF2979FF.toInt() else 0xFF555555.toInt()
+        canvas.drawRoundRect(RectF(toggleX, toggleCy - toggleH2, toggleX + toggleW, toggleCy + toggleH2), toggleH2, toggleH2, paint)
+        val knobX = if (world.perspectiveEnabled) toggleX + toggleW - toggleH2 else toggleX + toggleH2
+        paint.color = Color.WHITE; canvas.drawCircle(knobX, toggleCy, toggleH2 * 0.9f, paint)
+
+        textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.035f; textPaint.color = Color.WHITE
+        canvas.drawText("3D Perspective", perspLeft + sw * 0.04f, perspY + perspH * 0.62f, textPaint)
+
+        // Back button
+        val btnW = sw * 0.48f; val btnH = sh * 0.055f
+        drawMenuButton(canvas, sw / 2, sh * 0.87f, btnW, btnH, "BACK", 0x55FFFFFF, 0x44FFFFFF)
+    }
+
     // ---- Helpers ----
     private fun drawStatBar(canvas: Canvas, label: String, ratio: Float, x: Float, y: Float, w: Float, h: Float, color: Int) {
         textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = h * 0.85f; textPaint.color = 0x99FFFFFF.toInt()
@@ -1019,5 +1171,8 @@ data class ControlAreas(
     val brake: RectF, val gas: RectF,
     val steerLeft: Float, val steerRight: Float, val steerCy: Float,
     val nosCx: Float, val nosCy: Float, val nosRadius: Float,
-    val pauseArea: RectF
+    val pauseArea: RectF,
+    val leftButton: RectF = RectF(), val rightButton: RectF = RectF(),
+    val brakeZone: RectF = RectF(),
+    val scheme: ControlScheme = ControlScheme.NFS
 )

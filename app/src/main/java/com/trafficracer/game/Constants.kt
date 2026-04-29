@@ -119,9 +119,16 @@ enum class GameState {
     START_SCREEN,
     GARAGE,
     MISSIONS_SCREEN,
+    SETTINGS,
     PLAYING,
     PAUSED,
     GAME_OVER
+}
+
+enum class ControlScheme(val displayName: String, val description: String) {
+    NFS("NFS Style", "Steering wheel + Gas/Brake pedals + NOS button"),
+    SIMPLE("Simple", "Auto gas • Brake anywhere • Left/Right buttons"),
+    ARCADE("Arcade", "Left/Right buttons • Brake anywhere • Auto gas")
 }
 
 enum class CarType(val widthMult: Float, val heightMult: Float, val speedMult: Float) {
