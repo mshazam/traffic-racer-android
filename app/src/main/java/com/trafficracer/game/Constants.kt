@@ -39,8 +39,8 @@ object Constants {
     const val NOS_FILL_ON_NEAR_MISS = 8f
     const val NOS_FILL_ON_OVERTAKE = 5f
 
-    const val TRAFFIC_SPAWN_INTERVAL_MS = 700L
-    const val TRAFFIC_MIN_SPAWN_MS = 250L
+    const val TRAFFIC_SPAWN_INTERVAL_MS = 1200L
+    const val TRAFFIC_MIN_SPAWN_MS = 500L
     const val TRAFFIC_SPEED_VARIANCE = 0.4f
     const val ONCOMING_TRAFFIC_CHANCE = 0.12f
     const val ONCOMING_SPEED_MULT = 1.8f

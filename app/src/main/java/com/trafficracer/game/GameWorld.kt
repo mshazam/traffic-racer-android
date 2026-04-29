@@ -150,6 +150,10 @@ class GameWorld(private val context: Context) {
     // ---- Main update loop ----
     fun update(deltaTime: Float) {
         if (state != GameState.PLAYING) return
+        try { updateInternal(deltaTime) } catch (_: Exception) {}
+    }
+
+    private fun updateInternal(deltaTime: Float) {
         val now = System.currentTimeMillis()
 
         updateSlowMo(now)
@@ -318,7 +322,7 @@ class GameWorld(private val context: Context) {
         val baseH = screenHeight * Constants.PLAYER_HEIGHT_RATIO
         val laneX = getLaneCenter(lane)
 
-        val canSpawn = trafficCars.none { it.laneIndex == lane && it.y < baseH * type.heightMult * 2.5f }
+        val canSpawn = trafficCars.none { it.laneIndex == lane && it.y < baseH * type.heightMult * 4f } && trafficCars.size < 6
         if (canSpawn) {
             val isOncoming = Random.nextFloat() < Constants.ONCOMING_TRAFFIC_CHANCE
             val sv = 1f + (Random.nextFloat() - 0.5f) * Constants.TRAFFIC_SPEED_VARIANCE * 2f
@@ -471,19 +475,21 @@ class GameWorld(private val context: Context) {
         val sx = pr.width() * 0.12f; val sy = pr.height() * 0.08f
         val ph = android.graphics.RectF(pr.left + sx, pr.top + sy, pr.right - sx, pr.bottom - sy)
 
+        var hitCar: TrafficCar? = null
         for (car in trafficCars) {
             val cr = car.getRect()
-            val cx = cr.width() * 0.1f; val cy = cr.height() * 0.05f
-            val ch = android.graphics.RectF(cr.left + cx, cr.top + cy, cr.right - cx, cr.bottom - cy)
-            if (android.graphics.RectF.intersects(ph, ch)) {
-                if (player.hasShield) {
-                    player.hasShield = false
-                    spawnParticles(car.x, car.y, Constants.PARTICLE_COUNT_CRASH, 0xFF00E5FF.toInt())
-                    addFloatingText(car.x, car.y, "SHIELD!", 0xFF00E5FF.toInt(), 1.2f)
-                    soundManager?.playPowerUp(); trafficCars.remove(car); return
-                }
-                handleCrash(now, car); return
+            val cxs = cr.width() * 0.1f; val cys = cr.height() * 0.05f
+            val ch = android.graphics.RectF(cr.left + cxs, cr.top + cys, cr.right - cxs, cr.bottom - cys)
+            if (android.graphics.RectF.intersects(ph, ch)) { hitCar = car; break }
+        }
+        if (hitCar != null) {
+            if (player.hasShield) {
+                player.hasShield = false
+                spawnParticles(hitCar.x, hitCar.y, Constants.PARTICLE_COUNT_CRASH, 0xFF00E5FF.toInt())
+                addFloatingText(hitCar.x, hitCar.y, "SHIELD!", 0xFF00E5FF.toInt(), 1.2f)
+                soundManager?.playPowerUp(); trafficCars.remove(hitCar); return
             }
+            handleCrash(now, hitCar); return
         }
         // Coins
         val ci = coins.iterator()
@@ -686,7 +692,7 @@ class GameWorld(private val context: Context) {
     fun setSteering(input: Float) { player.steerInput = input.coerceIn(-1f, 1f) }
     fun setAccelerating(active: Boolean) { player.isAccelerating = active }
     fun setBraking(active: Boolean) { player.isBraking = active }
-    fun activateNOS() { if (player.nosAmount >= Constants.NOS_MIN_TO_ACTIVATE) { player.nosActive = true; soundManager?.playBoost() } }
+    fun activateNOS() { try { if (player.nosAmount >= Constants.NOS_MIN_TO_ACTIVATE) { player.nosActive = true; soundManager?.playBoost() } } catch (_: Exception) {} }
     fun deactivateNOS() { player.nosActive = false }
     fun pause() { if (state == GameState.PLAYING) state = GameState.PAUSED }
     fun resume() { if (state == GameState.PAUSED) state = GameState.PLAYING }

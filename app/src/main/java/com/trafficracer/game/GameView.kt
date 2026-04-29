@@ -48,13 +48,15 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     fun render(canvas: Canvas) { renderer.render(canvas, gameWorld) }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        when (gameWorld.state) {
-            GameState.PLAYING, GameState.PAUSED -> handleGameplayTouch(event)
-            GameState.START_SCREEN -> handleStartScreenTouch(event)
-            GameState.GARAGE -> handleGarageTouch(event)
-            GameState.MISSIONS_SCREEN -> handleMissionsTouch(event)
-            GameState.GAME_OVER -> handleGameOverTouch(event)
-        }
+        try {
+            when (gameWorld.state) {
+                GameState.PLAYING, GameState.PAUSED -> handleGameplayTouch(event)
+                GameState.START_SCREEN -> handleStartScreenTouch(event)
+                GameState.GARAGE -> handleGarageTouch(event)
+                GameState.MISSIONS_SCREEN -> handleMissionsTouch(event)
+                GameState.GAME_OVER -> handleGameOverTouch(event)
+            }
+        } catch (_: Exception) {}
         return true
     }
 
@@ -147,11 +149,11 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         val btnW = gameWorld.screenWidth * 0.55f; val btnH = gameWorld.screenHeight * 0.065f
         val cx = gameWorld.screenWidth / 2
 
-        val playY = gameWorld.screenHeight * 0.56f
+        val playY = gameWorld.screenHeight * 0.55f
         if (abs(tx - cx) < btnW / 2 && abs(ty - playY) < btnH) { gameWorld.startGame(); return }
-        val garageY = gameWorld.screenHeight * 0.66f
+        val garageY = gameWorld.screenHeight * 0.64f
         if (abs(tx - cx) < btnW / 2 && abs(ty - garageY) < btnH) { gameWorld.state = GameState.GARAGE; return }
-        val missY = gameWorld.screenHeight * 0.75f
+        val missY = gameWorld.screenHeight * 0.73f
         if (abs(tx - cx) < btnW / 2 && abs(ty - missY) < btnH) { gameWorld.state = GameState.MISSIONS_SCREEN; return }
     }
 
@@ -178,7 +180,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         }
 
         // Back
-        val backY = sh * 0.78f
+        val backY = sh * 0.77f
         if (abs(tx - sw / 2) < btnW / 2 && abs(ty - backY) < btnH) { gameWorld.state = GameState.START_SCREEN; return }
     }
 
