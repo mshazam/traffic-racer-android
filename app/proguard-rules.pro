@@ -1,2 +1,6 @@
 -keepclassmembers class com.trafficracer.game.** { *; }
--keep class com.trafficracer.game.SoundManager { *; }
+
+# LibGDX
+-keep class com.badlogic.gdx.** { *; }
+-keep class com.badlogic.gdx.backends.android.** { *; }
+-dontwarn com.badlogic.gdx.**

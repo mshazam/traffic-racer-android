@@ -36,6 +36,7 @@ class GameScreen(private val game: TrafficRacerGame) : ScreenAdapter() {
 
     // Models
     private val carModels = mutableMapOf<String, Model>()
+    private var fallbackCarModel: Model? = null
     private var roadModel: Model? = null
     private var roadInstances = mutableListOf<ModelInstance>()
 
@@ -105,6 +106,12 @@ class GameScreen(private val game: TrafficRacerGame) : ScreenAdapter() {
     }
 
     private fun loadModels() {
+        // Create fallback box model in case OBJ loading fails
+        val builder = ModelBuilder()
+        val attr = (VertexAttributes.Usage.Position or VertexAttributes.Usage.Normal).toLong()
+        fallbackCarModel = builder.createBox(1.8f, 1f, 4f,
+            Material(ColorAttribute.createDiffuse(Color.RED)), attr)
+
         val loader = ObjLoader()
         val allFiles = mutableSetOf<String>()
         PlayerCarDef.ALL.forEach { allFiles.add(it.modelFile) }
@@ -114,8 +121,10 @@ class GameScreen(private val game: TrafficRacerGame) : ScreenAdapter() {
             try {
                 val model = loader.loadModel(Gdx.files.internal("models/$file"))
                 carModels[file] = model
+                Gdx.app.log("GameScreen", "Loaded model: $file")
             } catch (e: Exception) {
-                Gdx.app.error("GameScreen", "Failed to load model: $file", e)
+                Gdx.app.error("GameScreen", "Failed to load model: $file - using fallback", e)
+                carModels[file] = fallbackCarModel!!
             }
         }
     }
@@ -589,7 +598,7 @@ class GameScreen(private val game: TrafficRacerGame) : ScreenAdapter() {
     override fun dispose() {
         modelBatch.dispose()
         shapeRenderer.dispose()
-        carModels.values.forEach { it.dispose() }
+        (carModels.values + listOfNotNull(fallbackCarModel)).toSet().forEach { it.dispose() }
         roadModel?.dispose()
         grassModel?.dispose()
         coinModel?.dispose()
