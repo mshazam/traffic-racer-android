@@ -13,8 +13,11 @@ android {
         applicationId = "com.trafficracer.game"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1"
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
     }
 
     buildTypes {
@@ -25,6 +28,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        debug {
+            isMinifyEnabled = false
         }
     }
 
@@ -40,26 +46,51 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("src/main/assets")
+            jniLibs.srcDirs("libs")
         }
     }
 }
 
+// Configuration for native dependencies
+val natives: Configuration by configurations.creating
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
 
     // LibGDX core
     implementation("com.badlogicgames.gdx:gdx:$gdxVersion")
     // LibGDX Android backend
     implementation("com.badlogicgames.gdx:gdx-backend-android:$gdxVersion")
-    // LibGDX native libs for Android
+
+    // Native libs (extracted by copyNativeLibs task)
     natives("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-armeabi-v7a")
     natives("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-arm64-v8a")
     natives("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86")
     natives("com.badlogicgames.gdx:gdx-platform:$gdxVersion:natives-x86_64")
 }
 
-// Extract native libs from jars into jniLibs
-fun DependencyHandlerScope.natives(dependencyNotation: String) {
-    add("implementation", dependencyNotation)
+// Extract native .so files from jars into libs/ directory
+tasks.register("copyNativeLibs") {
+    doFirst {
+        val libsDir = file("libs")
+        libsDir.deleteRecursively()
+        natives.files.forEach { jar ->
+            val abi = when {
+                jar.name.contains("armeabi-v7a") -> "armeabi-v7a"
+                jar.name.contains("arm64-v8a") -> "arm64-v8a"
+                jar.name.contains("x86_64") -> "x86_64"
+                jar.name.contains("x86") -> "x86"
+                else -> return@forEach
+            }
+            val outDir = file("libs/$abi")
+            outDir.mkdirs()
+            zipTree(jar).matching { include("*.so") }.forEach { soFile ->
+                soFile.copyTo(File(outDir, soFile.name), overwrite = true)
+            }
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.contains("JniLibFolders") }.configureEach {
+    dependsOn("copyNativeLibs")
 }
