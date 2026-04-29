@@ -23,17 +23,35 @@ class GameWorld(private val context: Context) {
     val particles = mutableListOf<Particle>()
     val roadMarkings = mutableListOf<RoadMarking>()
     val sceneryObjects = mutableListOf<SceneryObject>()
+    val floatingTexts = mutableListOf<FloatingText>()
+    val hazards = mutableListOf<RoadHazard>()
+    val mysteryBoxes = mutableListOf<MysteryBox>()
+    val weatherParticles = mutableListOf<WeatherParticle>()
+    val tireTrails = mutableListOf<TireTrack>()
+    val driftSparks = mutableListOf<DriftSpark>()
+    var activeMilestone: MilestoneEvent? = null
 
-    var highScore: Long = 0L
+    var currentEnvironment: Environment = Environment.CITY
     var nightFactor: Float = 0f
     var screenShakeX: Float = 0f
     var screenShakeY: Float = 0f
+    var slowMoFactor: Float = 1f
+    var slowMoEndTime: Long = 0
+    var cameraZoom: Float = 1f
+
+    var garageSelectedIndex: Int = 0
+    var mysteryBoxReward: String? = null
+    var mysteryBoxRewardTime: Long = 0
+
+    val gameData by lazy { GameData(context) }
+    var currentMissions: List<MissionDef> = emptyList()
+    val missionProgress = mutableMapOf<String, Int>()
+    var newAchievements = mutableListOf<AchievementDef>()
+
     private var screenShakeEndTime: Long = 0
     private var lastTrafficSpawn: Long = 0
-    private var markingOffset: Float = 0f
-    private var sceneryOffset: Float = 0f
-
-    private val highScoreManager by lazy { HighScoreManager(context) }
+    private var lastMilestoneDistance: Long = 0
+    private var environmentDistance: Float = 0f
     private var soundManager: SoundManager? = null
 
     private val trafficColors = intArrayOf(
@@ -52,9 +70,9 @@ class GameWorld(private val context: Context) {
         roadRight = roadLeft + roadWidth
         laneWidth = roadWidth / Constants.NUM_LANES
 
-        highScore = highScoreManager.getHighScore()
-
         soundManager = SoundManager(context)
+        currentMissions = MissionBank.generateMissions(gameData.missionDifficulty)
+        garageSelectedIndex = PlayerCarDef.ALL_CARS.indexOfFirst { it.id == gameData.selectedCarId }.coerceAtLeast(0)
 
         initRoadMarkings()
         initScenery()
@@ -78,467 +96,546 @@ class GameWorld(private val context: Context) {
         var y = 0f
         while (y < screenHeight + spacing) {
             sceneryObjects.add(SceneryObject(
-                x = roadLeft - screenWidth * 0.08f,
-                y = y,
-                type = Random.nextInt(3),
-                scale = 0.8f + Random.nextFloat() * 0.4f
+                x = roadLeft - screenWidth * 0.08f, y = y,
+                type = Random.nextInt(4), scale = 0.8f + Random.nextFloat() * 0.4f
             ))
             sceneryObjects.add(SceneryObject(
-                x = roadRight + screenWidth * 0.08f,
-                y = y + spacing * 0.5f,
-                type = Random.nextInt(3),
-                scale = 0.8f + Random.nextFloat() * 0.4f
+                x = roadRight + screenWidth * 0.08f, y = y + spacing * 0.5f,
+                type = Random.nextInt(4), scale = 0.8f + Random.nextFloat() * 0.4f
             ))
             y += spacing
         }
     }
 
+    private fun initWeatherParticles() {
+        weatherParticles.clear()
+        if (currentEnvironment.hasWeather) {
+            for (i in 0 until Constants.WEATHER_PARTICLE_COUNT) {
+                weatherParticles.add(WeatherParticle(
+                    x = Random.nextFloat() * screenWidth,
+                    y = Random.nextFloat() * screenHeight,
+                    speed = Constants.WEATHER_PARTICLE_SPEED * (0.7f + Random.nextFloat() * 0.6f),
+                    size = if (currentEnvironment.weatherType == WeatherType.SNOW) 3f + Random.nextFloat() * 4f else 1.5f + Random.nextFloat() * 2f,
+                    alpha = 0.4f + Random.nextFloat() * 0.6f,
+                    windOffset = Random.nextFloat() * 2f - 1f
+                ))
+            }
+        }
+    }
+
     fun startGame() {
         state = GameState.PLAYING
+        val selectedCar = gameData.getSelectedCar()
         player = PlayerCar(
-            laneIndex = Constants.NUM_LANES / 2,
-            targetLaneIndex = Constants.NUM_LANES / 2,
             width = screenWidth * Constants.PLAYER_WIDTH_RATIO,
-            height = screenHeight * Constants.PLAYER_HEIGHT_RATIO
+            height = screenHeight * Constants.PLAYER_HEIGHT_RATIO,
+            carDef = selectedCar
         )
-        player.x = getLaneCenter(player.laneIndex)
-        player.y = screenHeight * 0.78f
+        player.x = screenWidth / 2f
+        player.y = screenHeight * 0.75f
 
-        trafficCars.clear()
-        coins.clear()
-        powerUps.clear()
-        particles.clear()
-        nightFactor = 0f
-        lastTrafficSpawn = 0
-        markingOffset = 0f
+        trafficCars.clear(); coins.clear(); powerUps.clear(); particles.clear()
+        floatingTexts.clear(); hazards.clear(); mysteryBoxes.clear()
+        tireTrails.clear(); driftSparks.clear()
+        nightFactor = 0f; lastTrafficSpawn = 0; lastMilestoneDistance = 0
+        environmentDistance = 0f; currentEnvironment = Environment.CITY
+        slowMoFactor = 1f; cameraZoom = 1f; activeMilestone = null
+        mysteryBoxReward = null; missionProgress.clear()
 
-        initRoadMarkings()
-        initScenery()
+        initRoadMarkings(); initScenery(); initWeatherParticles()
     }
 
-    fun getLaneCenter(lane: Int): Float {
-        return roadLeft + laneWidth * lane + laneWidth / 2f
-    }
+    fun getLaneCenter(lane: Int): Float = roadLeft + laneWidth * lane + laneWidth / 2f
 
+    // ---- Main update loop ----
     fun update(deltaTime: Float) {
         if (state != GameState.PLAYING) return
-
         val now = System.currentTimeMillis()
+
+        updateSlowMo(now)
+        val dt = deltaTime * slowMoFactor
         val effectiveSpeed = player.getEffectiveSpeed()
 
-        player.speed = min(player.speed + Constants.SPEED_INCREMENT * deltaTime * 60f, Constants.MAX_SPEED)
-        player.distanceScore += effectiveSpeed * Constants.DISTANCE_SCORE_FACTOR * deltaTime * 60f
+        updateSpeed(dt)
+        updateSteering(dt)
+        updateNOS(dt)
+        updateBrakeLights(dt)
 
-        val scoreMultiplier = if (player.hasDoubleScore) 2 else 1
-        player.score = (player.distanceScore.toLong() + player.coinScore) * scoreMultiplier
+        player.distanceScore += effectiveSpeed * Constants.DISTANCE_SCORE_FACTOR * dt * 60f
+        player.distanceWithoutCrash += effectiveSpeed * Constants.DISTANCE_SCORE_FACTOR * dt * 60f
+        val kmh = effectiveSpeed * 12f
+        if (kmh > player.maxSpeedReachedThisRun) player.maxSpeedReachedThisRun = kmh
 
-        updatePlayerPosition(deltaTime)
+        val scoreMult = if (player.hasDoubleScore) 2 else 1
+        player.score = (player.distanceScore.toLong() + player.coinScore) * scoreMult
+
+        environmentDistance += effectiveSpeed * dt * 60f
+        if (environmentDistance > Constants.ENV_CHANGE_DISTANCE) { cycleEnvironment(); environmentDistance = 0f }
+
+        updateCameraZoom(dt)
         updatePowerUpTimers(now)
-        updateTraffic(deltaTime, now, effectiveSpeed)
-        updateCoins(deltaTime, effectiveSpeed)
-        updatePowerUps(deltaTime, effectiveSpeed)
-        updateParticles(deltaTime)
-        updateRoadMarkings(deltaTime, effectiveSpeed)
-        updateScenery(deltaTime, effectiveSpeed)
+        updateSlipTimer(now)
+        updateTraffic(dt, now, effectiveSpeed)
+        updateCoins(dt, effectiveSpeed)
+        updatePowerUps(dt, effectiveSpeed)
+        updateHazards(dt, effectiveSpeed)
+        updateMysteryBoxes(dt, effectiveSpeed)
+        updateParticles(dt)
+        updateDriftSparks(dt)
+        updateFloatingTexts(now)
+        updateRoadMarkings(dt, effectiveSpeed)
+        updateScenery(dt, effectiveSpeed)
+        updateWeatherParticles(dt, effectiveSpeed)
+        updateTireTrails(dt)
         updateNightCycle()
         updateScreenShake(now)
+        updateMilestones(now)
         checkCollisions(now)
         checkNearMisses(now)
+        checkOvertakes(now)
+        checkMissionProgress()
     }
 
-    private fun updatePlayerPosition(deltaTime: Float) {
-        val targetX = getLaneCenter(player.targetLaneIndex)
-        val dx = targetX - player.x
-        if (abs(dx) > 1f) {
-            player.x += dx * Constants.LANE_SWITCH_SPEED * deltaTime * 60f
-            player.laneTransition = abs(dx) / laneWidth
-        } else {
-            player.x = targetX
-            player.laneIndex = player.targetLaneIndex
-            player.laneTransition = 0f
+    // ---- NFS Physics ----
+    private fun updateSpeed(dt: Float) {
+        val accel = when {
+            player.isAccelerating -> Constants.ACCEL_FORCE * player.carDef.baseSpeed
+            player.isBraking -> -Constants.BRAKE_FORCE
+            else -> -Constants.COAST_DECEL
         }
+        player.speed += accel * dt * 60f
+        player.speed += Constants.IDLE_SPEED * 0.01f * dt * 60f
+        player.speed = player.speed.coerceIn(Constants.IDLE_SPEED, Constants.MAX_SPEED * player.carDef.baseSpeed)
+    }
+
+    private fun updateSteering(dt: Float) {
+        val handling = player.getEffectiveHandling()
+        val targetAngle = player.steerInput * Constants.MAX_STEER_ANGLE
+
+        if (abs(player.steerInput) > 0.05f) {
+            player.steerAngle += (targetAngle - player.steerAngle) * Constants.STEER_SPEED * handling * dt
+        } else {
+            player.steerAngle *= (1f - Constants.STEER_RETURN_SPEED * dt)
+            if (abs(player.steerAngle) < 0.01f) player.steerAngle = 0f
+        }
+        player.steerAngle = player.steerAngle.coerceIn(-Constants.MAX_STEER_ANGLE, Constants.MAX_STEER_ANGLE)
+
+        val moveX = player.steerAngle * Constants.STEER_TO_MOVEMENT * player.speed / 15f * dt * 60f
+        player.x += moveX
+
+        // Drift
+        player.isDrifting = player.isDriftingNow()
+        if (player.isDrifting) {
+            val driftTarget = player.steerAngle * 0.3f
+            player.driftAngle += (driftTarget - player.driftAngle) * Constants.DRIFT_FACTOR * dt * 10f
+            if (Random.nextFloat() < 0.3f) spawnDriftSpark()
+            player.nosAmount = min(Constants.NOS_MAX, player.nosAmount + 0.5f * dt * 60f)
+        } else {
+            player.driftAngle *= (1f - dt * 8f)
+        }
+
+        // Clamp to road
+        val margin = player.width * 0.4f
+        player.x = player.x.coerceIn(roadLeft + margin, roadRight - margin)
+    }
+
+    private fun updateNOS(dt: Float) {
+        if (player.nosActive && player.nosAmount > 0) {
+            player.nosAmount -= Constants.NOS_DRAIN_RATE * dt
+            if (player.nosAmount <= 0) {
+                player.nosAmount = 0f
+                player.nosActive = false
+            }
+        } else if (!player.nosActive) {
+            player.nosAmount = min(Constants.NOS_MAX, player.nosAmount + Constants.NOS_FILL_RATE * dt)
+        }
+    }
+
+    private fun updateBrakeLights(dt: Float) {
+        val target = if (player.isBraking) 1f else 0f
+        player.brakeLightIntensity += (target - player.brakeLightIntensity) * 10f * dt
+    }
+
+    private fun updateSlowMo(now: Long) {
+        if (now < slowMoEndTime) {
+            val elapsed = (now - (slowMoEndTime - Constants.SLOW_MO_DURATION_MS)).toFloat()
+            val progress = (elapsed / Constants.SLOW_MO_DURATION_MS).coerceIn(0f, 1f)
+            slowMoFactor = Constants.SLOW_MO_FACTOR + (1f - Constants.SLOW_MO_FACTOR) * progress * 0.3f
+        } else {
+            slowMoFactor = min(slowMoFactor + 0.05f, 1f)
+        }
+    }
+
+    private fun updateCameraZoom(dt: Float) {
+        val target = when {
+            player.nosActive -> Constants.CAMERA_ZOOM_BOOST
+            player.speed > Constants.SPEED_BLUR_THRESHOLD -> 1f + (player.speed - Constants.SPEED_BLUR_THRESHOLD) / Constants.MAX_SPEED * 0.02f
+            else -> 1f
+        }
+        cameraZoom += (target - cameraZoom) * Constants.CAMERA_ZOOM_SPEED * dt * 60f
+    }
+
+    private fun cycleEnvironment() {
+        val envs = Environment.entries
+        val nextIndex = (envs.indexOf(currentEnvironment) + 1) % envs.size
+        currentEnvironment = envs[nextIndex]
+        initScenery(); initWeatherParticles()
+        addFloatingText(screenWidth / 2, screenHeight * 0.3f, currentEnvironment.displayName, 0xFFFFFFFF.toInt(), 2.0f)
     }
 
     private fun updatePowerUpTimers(now: Long) {
-        if (player.isBoosting && now > player.boostEndTime) {
-            player.isBoosting = false
-        }
-        if (player.hasShield && now > player.shieldEndTime) {
-            player.hasShield = false
-        }
-        if (player.hasMagnet && now > player.magnetEndTime) {
-            player.hasMagnet = false
-        }
-        if (player.hasDoubleScore && now > player.doubleScoreEndTime) {
-            player.hasDoubleScore = false
-        }
-        if (player.isInvincible && now > player.invincibleEndTime) {
-            player.isInvincible = false
-        }
+        if (player.hasShield && now > player.shieldEndTime) player.hasShield = false
+        if (player.hasMagnet && now > player.magnetEndTime) player.hasMagnet = false
+        if (player.hasDoubleScore && now > player.doubleScoreEndTime) player.hasDoubleScore = false
+        if (player.isInvincible && now > player.invincibleEndTime) player.isInvincible = false
     }
 
+    private fun updateSlipTimer(now: Long) {
+        if (player.isSlipping && now > player.slipEndTime) player.isSlipping = false
+    }
+
+    // ---- Traffic ----
     private fun updateTraffic(deltaTime: Float, now: Long, effectiveSpeed: Float) {
         val spawnInterval = max(
             Constants.TRAFFIC_MIN_SPAWN_MS,
-            Constants.TRAFFIC_SPAWN_INTERVAL_MS - (player.speed * 15).toLong()
+            Constants.TRAFFIC_SPAWN_INTERVAL_MS - (player.speed * 12).toLong()
         )
+        if (now - lastTrafficSpawn > spawnInterval) { spawnTraffic(); lastTrafficSpawn = now }
 
-        if (now - lastTrafficSpawn > spawnInterval) {
-            spawnTraffic()
-            lastTrafficSpawn = now
-        }
-
-        val iterator = trafficCars.iterator()
-        while (iterator.hasNext()) {
-            val car = iterator.next()
-            val relativeSpeed = effectiveSpeed - car.speed
-            car.y += relativeSpeed * deltaTime * 60f
-            if (car.y > screenHeight + car.height || car.y < -car.height * 2) {
-                iterator.remove()
-            }
+        val iter = trafficCars.iterator()
+        while (iter.hasNext()) {
+            val car = iter.next()
+            if (car.isOncoming) car.y += (effectiveSpeed + car.speed) * deltaTime * 60f
+            else car.y += (effectiveSpeed - car.speed) * deltaTime * 60f
+            if (car.y > screenHeight + car.height || car.y < -car.height * 3) iter.remove()
         }
     }
 
     private fun spawnTraffic() {
         val lane = Random.nextInt(Constants.NUM_LANES)
         val type = CarType.entries[Random.nextInt(CarType.entries.size)]
-        val baseWidth = screenWidth * Constants.PLAYER_WIDTH_RATIO
-        val baseHeight = screenHeight * Constants.PLAYER_HEIGHT_RATIO
+        val baseW = screenWidth * Constants.PLAYER_WIDTH_RATIO
+        val baseH = screenHeight * Constants.PLAYER_HEIGHT_RATIO
+        val laneX = getLaneCenter(lane)
 
-        val canSpawn = trafficCars.none { car ->
-            car.laneIndex == lane && car.y < baseHeight * type.heightMult * 2.5f
-        }
-
+        val canSpawn = trafficCars.none { it.laneIndex == lane && it.y < baseH * type.heightMult * 2.5f }
         if (canSpawn) {
-            val speedVariance = 1f + (Random.nextFloat() - 0.5f) * Constants.TRAFFIC_SPEED_VARIANCE * 2f
-            val trafficSpeed = player.speed * 0.6f * type.speedMult * speedVariance
-
+            val isOncoming = Random.nextFloat() < Constants.ONCOMING_TRAFFIC_CHANCE
+            val sv = 1f + (Random.nextFloat() - 0.5f) * Constants.TRAFFIC_SPEED_VARIANCE * 2f
+            val spd = if (isOncoming) player.speed * Constants.ONCOMING_SPEED_MULT * sv
+                      else player.speed * 0.6f * type.speedMult * sv
             trafficCars.add(TrafficCar(
-                x = getLaneCenter(lane),
-                y = -baseHeight * type.heightMult,
-                width = baseWidth * type.widthMult,
-                height = baseHeight * type.heightMult,
-                speed = trafficSpeed,
-                laneIndex = lane,
-                type = type,
-                color = trafficColors[Random.nextInt(trafficColors.size)]
+                x = laneX, y = if (isOncoming) screenHeight + baseH * type.heightMult else -baseH * type.heightMult,
+                width = baseW * type.widthMult, height = baseH * type.heightMult,
+                speed = spd, laneIndex = lane, type = type,
+                color = trafficColors[Random.nextInt(trafficColors.size)], isOncoming = isOncoming
             ))
         }
-
-        if (Random.nextFloat() < Constants.COIN_SPAWN_CHANCE) {
-            spawnCoin()
-        }
-        if (Random.nextFloat() < Constants.POWERUP_SPAWN_CHANCE) {
-            spawnPowerUp()
-        }
+        if (Random.nextFloat() < Constants.COIN_SPAWN_CHANCE) spawnCoin()
+        if (Random.nextFloat() < Constants.POWERUP_SPAWN_CHANCE) spawnPowerUp()
+        if (Random.nextFloat() < Constants.HAZARD_SPAWN_CHANCE) spawnHazard()
+        if (Random.nextFloat() < Constants.MYSTERY_BOX_SPAWN_CHANCE) spawnMysteryBox()
     }
 
     private fun spawnCoin() {
         val lane = Random.nextInt(Constants.NUM_LANES)
-        val coinSize = screenWidth * Constants.COIN_SIZE_RATIO
-        coins.add(Coin(
-            x = getLaneCenter(lane),
-            y = -coinSize,
-            size = coinSize,
-            laneIndex = lane
-        ))
+        val s = screenWidth * Constants.COIN_SIZE_RATIO
+        coins.add(Coin(x = getLaneCenter(lane), y = -s, size = s, laneIndex = lane))
     }
-
     private fun spawnPowerUp() {
         val lane = Random.nextInt(Constants.NUM_LANES)
-        val size = screenWidth * Constants.COIN_SIZE_RATIO * 1.5f
-        val type = PowerUpType.entries[Random.nextInt(PowerUpType.entries.size)]
-        powerUps.add(PowerUp(
-            x = getLaneCenter(lane),
-            y = -size,
-            size = size,
-            laneIndex = lane,
-            type = type
-        ))
+        val s = screenWidth * Constants.COIN_SIZE_RATIO * 1.5f
+        val t = PowerUpType.entries[Random.nextInt(PowerUpType.entries.size)]
+        powerUps.add(PowerUp(x = getLaneCenter(lane), y = -s, size = s, laneIndex = lane, type = t))
+    }
+    private fun spawnHazard() {
+        val lane = Random.nextInt(Constants.NUM_LANES)
+        val s = screenWidth * Constants.HAZARD_SIZE_RATIO
+        val t = HazardType.entries[Random.nextInt(HazardType.entries.size)]
+        hazards.add(RoadHazard(x = getLaneCenter(lane), y = -s, size = s, laneIndex = lane, type = t))
+    }
+    private fun spawnMysteryBox() {
+        val lane = Random.nextInt(Constants.NUM_LANES)
+        val s = screenWidth * Constants.MYSTERY_BOX_SIZE_RATIO
+        mysteryBoxes.add(MysteryBox(x = getLaneCenter(lane), y = -s, size = s, laneIndex = lane))
     }
 
-    private fun updateCoins(deltaTime: Float, effectiveSpeed: Float) {
-        val magnetRange = if (player.hasMagnet) screenWidth * Constants.MAGNET_RANGE_RATIO else 0f
-
-        val iterator = coins.iterator()
-        while (iterator.hasNext()) {
-            val coin = iterator.next()
-            coin.y += effectiveSpeed * deltaTime * 60f
-            coin.rotation += Constants.COIN_ROTATION_SPEED * deltaTime * 60f
-
-            if (coin.collected) {
-                coin.collectAnimProgress += deltaTime * 5f
-                if (coin.collectAnimProgress >= 1f) {
-                    iterator.remove()
-                    continue
-                }
-            } else if (player.hasMagnet) {
-                val dx = player.x - coin.x
-                val dy = player.y - coin.y
+    // ---- Item updates ----
+    private fun updateCoins(dt: Float, es: Float) {
+        val mr = if (player.hasMagnet) screenWidth * Constants.MAGNET_RANGE_RATIO else 0f
+        val iter = coins.iterator()
+        while (iter.hasNext()) {
+            val c = iter.next()
+            c.y += es * dt * 60f; c.rotation += Constants.COIN_ROTATION_SPEED * dt * 60f
+            if (c.collected) { c.collectAnimProgress += dt * 5f; if (c.collectAnimProgress >= 1f) { iter.remove(); continue } }
+            else if (player.hasMagnet) {
+                val dx = player.x - c.x; val dy = player.y - c.y
                 val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-                if (dist < magnetRange) {
-                    val pull = (1f - dist / magnetRange) * 0.15f * deltaTime * 60f
-                    coin.x += dx * pull
-                    coin.y += dy * pull
-                }
+                if (dist < mr) { val p = (1f - dist / mr) * 0.15f * dt * 60f; c.x += dx * p; c.y += dy * p }
             }
-
-            if (coin.y > screenHeight + coin.size) {
-                iterator.remove()
-            }
+            if (c.y > screenHeight + c.size) iter.remove()
         }
     }
-
-    private fun updatePowerUps(deltaTime: Float, effectiveSpeed: Float) {
-        val iterator = powerUps.iterator()
-        while (iterator.hasNext()) {
-            val pu = iterator.next()
-            pu.y += effectiveSpeed * deltaTime * 60f
-            pu.rotation += 3f * deltaTime * 60f
-            pu.pulsePhase += deltaTime * 4f
-
-            if (pu.y > screenHeight + pu.size) {
-                iterator.remove()
-            }
+    private fun updatePowerUps(dt: Float, es: Float) {
+        val iter = powerUps.iterator()
+        while (iter.hasNext()) { val p = iter.next(); p.y += es * dt * 60f; p.rotation += 3f * dt * 60f; p.pulsePhase += dt * 4f; if (p.y > screenHeight + p.size) iter.remove() }
+    }
+    private fun updateHazards(dt: Float, es: Float) {
+        val iter = hazards.iterator()
+        while (iter.hasNext()) { val h = iter.next(); h.y += es * dt * 60f; h.rotation += dt * 2f; if (h.y > screenHeight + h.size) iter.remove() }
+    }
+    private fun updateMysteryBoxes(dt: Float, es: Float) {
+        val iter = mysteryBoxes.iterator()
+        while (iter.hasNext()) { val m = iter.next(); m.y += es * dt * 60f; m.bouncePhase += dt * 5f; m.rotation += dt * 3f; if (m.y > screenHeight + m.size) iter.remove() }
+    }
+    private fun updateParticles(dt: Float) {
+        val iter = particles.iterator()
+        while (iter.hasNext()) {
+            val p = iter.next(); p.lifetime += dt * 1000f
+            if (p.lifetime >= p.maxLifetime) { iter.remove(); continue }
+            p.x += p.vx * dt * 60f; p.y += p.vy * dt * 60f; p.vy += p.gravity * dt * 60f
+            p.alpha = 1f - p.lifetime / p.maxLifetime
+            if (p.shrink) p.size *= (1f - dt * 2f)
         }
     }
-
-    private fun updateParticles(deltaTime: Float) {
-        val iterator = particles.iterator()
-        while (iterator.hasNext()) {
-            val p = iterator.next()
-            p.lifetime += deltaTime * 1000f
-            if (p.lifetime >= p.maxLifetime) {
-                iterator.remove()
-                continue
-            }
-            val progress = p.lifetime / p.maxLifetime
-            p.x += p.vx * deltaTime * 60f
-            p.y += p.vy * deltaTime * 60f
-            p.vy += p.gravity * deltaTime * 60f
-            p.alpha = 1f - progress
-            if (p.shrink) {
-                p.size *= (1f - deltaTime * 2f)
-            }
+    private fun updateDriftSparks(dt: Float) {
+        val iter = driftSparks.iterator()
+        while (iter.hasNext()) { val s = iter.next(); s.x += s.vx * dt * 60f; s.y += s.vy * dt * 60f; s.life -= dt * 3f; if (s.life <= 0) iter.remove() }
+    }
+    private fun updateFloatingTexts(now: Long) {
+        floatingTexts.removeAll { it.isExpired(now) }
+        for (ft in floatingTexts) ft.y -= Constants.FLOATING_TEXT_RISE_SPEED
+    }
+    private fun updateWeatherParticles(dt: Float, es: Float) {
+        if (!currentEnvironment.hasWeather) return
+        for (wp in weatherParticles) {
+            wp.y += (wp.speed + es * 0.5f) * dt * 60f; wp.x += wp.windOffset * dt * 60f
+            if (wp.y > screenHeight) { wp.y = -wp.size; wp.x = Random.nextFloat() * screenWidth }
+            if (wp.x < 0) wp.x = screenWidth; if (wp.x > screenWidth) wp.x = 0f
         }
     }
-
-    private fun updateRoadMarkings(deltaTime: Float, effectiveSpeed: Float) {
-        markingOffset += effectiveSpeed * deltaTime * 60f
-        val markingHeight = screenHeight * Constants.ROAD_MARKING_LENGTH_RATIO
+    private fun updateTireTrails(dt: Float) {
+        val iter = tireTrails.iterator()
+        while (iter.hasNext()) { val t = iter.next(); t.alpha -= dt * 0.8f; if (t.alpha <= 0) iter.remove() }
+    }
+    private fun updateRoadMarkings(dt: Float, es: Float) {
+        val mh = screenHeight * Constants.ROAD_MARKING_LENGTH_RATIO
         val gap = screenHeight * Constants.ROAD_MARKING_GAP_RATIO
-        val totalSpacing = markingHeight + gap
-
-        for (marking in roadMarkings) {
-            marking.y += effectiveSpeed * deltaTime * 60f
+        val ts = mh + gap
+        for (m in roadMarkings) m.y += es * dt * 60f
+        roadMarkings.removeAll { it.y > screenHeight + ts }
+        while (roadMarkings.isEmpty() || roadMarkings.minOf { it.y } > -ts)
+            roadMarkings.add(RoadMarking((if (roadMarkings.isEmpty()) 0f else roadMarkings.minOf { it.y }) - ts))
+    }
+    private fun updateScenery(dt: Float, es: Float) {
+        val sp = screenHeight * Constants.TREE_SPACING_RATIO
+        for (o in sceneryObjects) o.y += es * dt * 60f
+        sceneryObjects.removeAll { it.y > screenHeight + sp }
+        val l = sceneryObjects.filter { it.x < screenWidth / 2 }
+        val r = sceneryObjects.filter { it.x >= screenWidth / 2 }
+        if (l.isEmpty() || l.minOf { it.y } > -sp * 0.5f) {
+            val minY = if (l.isEmpty()) -sp else l.minOf { it.y }
+            sceneryObjects.add(SceneryObject(roadLeft - screenWidth * (0.05f + Random.nextFloat() * 0.06f), minY - sp * (0.8f + Random.nextFloat() * 0.4f), Random.nextInt(4), 0.8f + Random.nextFloat() * 0.4f))
         }
-
-        roadMarkings.removeAll { it.y > screenHeight + totalSpacing }
-
-        while (roadMarkings.isEmpty() || roadMarkings.minOf { it.y } > -totalSpacing) {
-            val minY = if (roadMarkings.isEmpty()) 0f else roadMarkings.minOf { it.y }
-            roadMarkings.add(RoadMarking(minY - totalSpacing))
+        if (r.isEmpty() || r.minOf { it.y } > -sp * 0.5f) {
+            val minY = if (r.isEmpty()) -sp else r.minOf { it.y }
+            sceneryObjects.add(SceneryObject(roadRight + screenWidth * (0.05f + Random.nextFloat() * 0.06f), minY - sp * (0.8f + Random.nextFloat() * 0.4f), Random.nextInt(4), 0.8f + Random.nextFloat() * 0.4f))
         }
     }
-
-    private fun updateScenery(deltaTime: Float, effectiveSpeed: Float) {
-        val spacing = screenHeight * Constants.TREE_SPACING_RATIO
-
-        for (obj in sceneryObjects) {
-            obj.y += effectiveSpeed * deltaTime * 60f
-        }
-
-        sceneryObjects.removeAll { it.y > screenHeight + spacing }
-
-        val leftObjs = sceneryObjects.filter { it.x < screenWidth / 2 }
-        val rightObjs = sceneryObjects.filter { it.x >= screenWidth / 2 }
-
-        if (leftObjs.isEmpty() || leftObjs.minOf { it.y } > -spacing * 0.5f) {
-            val minY = if (leftObjs.isEmpty()) -spacing else leftObjs.minOf { it.y }
-            sceneryObjects.add(SceneryObject(
-                x = roadLeft - screenWidth * (0.05f + Random.nextFloat() * 0.06f),
-                y = minY - spacing * (0.8f + Random.nextFloat() * 0.4f),
-                type = Random.nextInt(3),
-                scale = 0.8f + Random.nextFloat() * 0.4f
-            ))
-        }
-
-        if (rightObjs.isEmpty() || rightObjs.minOf { it.y } > -spacing * 0.5f) {
-            val minY = if (rightObjs.isEmpty()) -spacing else rightObjs.minOf { it.y }
-            sceneryObjects.add(SceneryObject(
-                x = roadRight + screenWidth * (0.05f + Random.nextFloat() * 0.06f),
-                y = minY - spacing * (0.8f + Random.nextFloat() * 0.4f),
-                type = Random.nextInt(3),
-                scale = 0.8f + Random.nextFloat() * 0.4f
-            ))
-        }
-    }
-
     private fun updateNightCycle() {
-        val targetNight = if (player.score > Constants.NIGHT_MODE_SCORE_THRESHOLD) {
-            min(1f, (player.score - Constants.NIGHT_MODE_SCORE_THRESHOLD) / 5000f)
-        } else 0f
-        nightFactor += (targetNight - nightFactor) * Constants.NIGHT_TRANSITION_SPEED
+        val cycle = (player.distanceScore / 800f) % 2f
+        nightFactor = if (cycle < 1f) cycle.coerceAtMost(0.7f) else (2f - cycle).coerceAtMost(0.7f)
     }
-
     private fun updateScreenShake(now: Long) {
         if (now < screenShakeEndTime) {
-            val progress = 1f - (screenShakeEndTime - now).toFloat() / Constants.SCREEN_SHAKE_DURATION_MS
-            val intensity = Constants.SCREEN_SHAKE_INTENSITY * (1f - progress)
-            screenShakeX = (Random.nextFloat() - 0.5f) * intensity * 2f
-            screenShakeY = (Random.nextFloat() - 0.5f) * intensity * 2f
-        } else {
-            screenShakeX = 0f
-            screenShakeY = 0f
+            val p = 1f - (screenShakeEndTime - now).toFloat() / Constants.SCREEN_SHAKE_DURATION_MS
+            val i = Constants.SCREEN_SHAKE_INTENSITY * (1f - p)
+            screenShakeX = (Random.nextFloat() - 0.5f) * i * 2f; screenShakeY = (Random.nextFloat() - 0.5f) * i * 2f
+        } else { screenShakeX = 0f; screenShakeY = 0f }
+    }
+    private fun updateMilestones(now: Long) {
+        activeMilestone?.let { if (it.isExpired(now)) activeMilestone = null }
+        val cd = player.distanceScore.toLong()
+        val next = ((lastMilestoneDistance / Constants.MILESTONE_INTERVAL) + 1) * Constants.MILESTONE_INTERVAL
+        if (cd >= next) {
+            lastMilestoneDistance = cd; activeMilestone = MilestoneEvent(next, now)
+            addFloatingText(screenWidth / 2, screenHeight * 0.25f, "${next}m!", 0xFF4CAF50.toInt(), 1.8f)
+            soundManager?.playMilestone()
         }
     }
 
+    // ---- Collisions ----
     private fun checkCollisions(now: Long) {
         if (player.isInvincible) return
-
-        val playerRect = player.getRect()
-
-        val shrinkX = playerRect.width() * 0.12f
-        val shrinkY = playerRect.height() * 0.08f
-        val playerHitbox = android.graphics.RectF(
-            playerRect.left + shrinkX,
-            playerRect.top + shrinkY,
-            playerRect.right - shrinkX,
-            playerRect.bottom - shrinkY
-        )
+        val pr = player.getRect()
+        val sx = pr.width() * 0.12f; val sy = pr.height() * 0.08f
+        val ph = android.graphics.RectF(pr.left + sx, pr.top + sy, pr.right - sx, pr.bottom - sy)
 
         for (car in trafficCars) {
-            val carRect = car.getRect()
-            val carShrinkX = carRect.width() * 0.1f
-            val carShrinkY = carRect.height() * 0.05f
-            val carHitbox = android.graphics.RectF(
-                carRect.left + carShrinkX,
-                carRect.top + carShrinkY,
-                carRect.right - carShrinkX,
-                carRect.bottom - carShrinkY
-            )
-
-            if (android.graphics.RectF.intersects(playerHitbox, carHitbox)) {
+            val cr = car.getRect()
+            val cx = cr.width() * 0.1f; val cy = cr.height() * 0.05f
+            val ch = android.graphics.RectF(cr.left + cx, cr.top + cy, cr.right - cx, cr.bottom - cy)
+            if (android.graphics.RectF.intersects(ph, ch)) {
                 if (player.hasShield) {
                     player.hasShield = false
                     spawnParticles(car.x, car.y, Constants.PARTICLE_COUNT_CRASH, 0xFF00E5FF.toInt())
-                    soundManager?.playPowerUp()
-                    trafficCars.remove(car)
-                    return
+                    addFloatingText(car.x, car.y, "SHIELD!", 0xFF00E5FF.toInt(), 1.2f)
+                    soundManager?.playPowerUp(); trafficCars.remove(car); return
                 }
-
-                handleCrash(now, car)
-                return
+                handleCrash(now, car); return
             }
         }
-
-        val coinIterator = coins.iterator()
-        while (coinIterator.hasNext()) {
-            val coin = coinIterator.next()
-            if (coin.collected) continue
-            val dx = player.x - coin.x
-            val dy = player.y - coin.y
-            val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-            if (dist < player.width * 0.6f + coin.size * 0.5f) {
-                coin.collected = true
-                coin.collectAnimProgress = 0f
-                player.coinScore += Constants.COIN_VALUE
-                spawnParticles(coin.x, coin.y, Constants.PARTICLE_COUNT_COIN, 0xFFFFD700.toInt())
+        // Coins
+        val ci = coins.iterator()
+        while (ci.hasNext()) { val c = ci.next(); if (c.collected) continue
+            val d = dist(player.x, player.y, c.x, c.y)
+            if (d < player.width * 0.6f + c.size * 0.5f) {
+                c.collected = true; c.collectAnimProgress = 0f; player.coinScore += Constants.COIN_VALUE; player.coinsCollectedThisRun++
+                spawnParticles(c.x, c.y, Constants.PARTICLE_COUNT_COIN, 0xFFFFD700.toInt())
+                addFloatingText(c.x, c.y - 20f, "+${Constants.COIN_VALUE}", 0xFFFFD700.toInt(), 1f)
                 soundManager?.playCoinPickup()
             }
         }
-
-        val puIterator = powerUps.iterator()
-        while (puIterator.hasNext()) {
-            val pu = puIterator.next()
-            val dx = player.x - pu.x
-            val dy = player.y - pu.y
-            val dist = kotlin.math.sqrt(dx * dx + dy * dy)
-            if (dist < player.width * 0.6f + pu.size * 0.5f) {
-                activatePowerUp(pu, now)
-                spawnParticles(pu.x, pu.y, Constants.PARTICLE_COUNT_POWERUP, pu.type.color)
-                soundManager?.playPowerUp()
-                puIterator.remove()
+        // PowerUps
+        val pi = powerUps.iterator()
+        while (pi.hasNext()) { val p = pi.next()
+            if (dist(player.x, player.y, p.x, p.y) < player.width * 0.6f + p.size * 0.5f) {
+                activatePowerUp(p, now); spawnParticles(p.x, p.y, Constants.PARTICLE_COUNT_POWERUP, p.type.color)
+                player.powerUpsCollectedThisRun++; soundManager?.playPowerUp(); pi.remove()
             }
         }
-    }
-
-    private fun handleCrash(now: Long, car: TrafficCar) {
-        player.lives--
-        player.isInvincible = true
-        player.invincibleEndTime = now + Constants.INVINCIBILITY_AFTER_HIT_MS
-        player.comboCount = 0
-        player.isBoosting = false
-
-        spawnParticles(
-            (player.x + car.x) / 2f,
-            (player.y + car.y) / 2f,
-            Constants.PARTICLE_COUNT_CRASH,
-            0xFFFF5722.toInt()
-        )
-
-        triggerScreenShake(now)
-        soundManager?.playCrash()
-
-        if (player.lives <= 0) {
-            gameOver()
+        // Hazards
+        val hi = hazards.iterator()
+        while (hi.hasNext()) { val h = hi.next()
+            if (android.graphics.RectF.intersects(ph, h.getRect())) {
+                when (h.type) {
+                    HazardType.OIL_SLICK -> if (!player.hasShield) {
+                        player.isSlipping = true; player.slipEndTime = now + h.type.durationMs
+                        addFloatingText(h.x, h.y, "SLIPPING!", 0xFFFF9800.toInt(), 1.2f); soundManager?.playHazard()
+                    }
+                    HazardType.CONE -> if (!player.hasShield) {
+                        spawnParticles(h.x, h.y, 15, 0xFFFF6D00.toInt()); triggerScreenShake(now)
+                        player.speed = max(Constants.IDLE_SPEED, player.speed * 0.8f)
+                        addFloatingText(h.x, h.y, "OUCH!", 0xFFFF5722.toInt(), 1f); soundManager?.playHazard()
+                    }
+                    HazardType.POTHOLE -> if (!player.hasShield) {
+                        player.isSlipping = true; player.slipEndTime = now + h.type.durationMs; triggerScreenShake(now)
+                        addFloatingText(h.x, h.y, "BUMP!", 0xFF795548.toInt(), 1f); soundManager?.playHazard()
+                    }
+                }
+                hi.remove()
+            }
         }
-    }
-
-    private fun activatePowerUp(pu: PowerUp, now: Long) {
-        when (pu.type) {
-            PowerUpType.SHIELD -> {
-                player.hasShield = true
-                player.shieldEndTime = now + Constants.SHIELD_DURATION_MS
-            }
-            PowerUpType.MAGNET -> {
-                player.hasMagnet = true
-                player.magnetEndTime = now + Constants.MAGNET_DURATION_MS
-            }
-            PowerUpType.DOUBLE_SCORE -> {
-                player.hasDoubleScore = true
-                player.doubleScoreEndTime = now + Constants.DOUBLE_SCORE_DURATION_MS
-            }
-            PowerUpType.EXTRA_LIFE -> {
-                player.lives = min(player.lives + 1, Constants.MAX_LIVES)
-            }
-            PowerUpType.NITRO -> {
-                player.isBoosting = true
-                player.boostEndTime = now + Constants.BOOST_DURATION_MS
+        // Mystery boxes
+        val mi = mysteryBoxes.iterator()
+        while (mi.hasNext()) { val m = mi.next()
+            if (dist(player.x, player.y, m.x, m.y) < player.width * 0.6f + m.size * 0.5f) {
+                openMysteryBox(m, now); spawnParticles(m.x, m.y, 25, 0xFFE040FB.toInt())
+                soundManager?.playMysteryBox(); mi.remove()
             }
         }
     }
 
     private fun checkNearMisses(now: Long) {
         if (player.isInvincible) return
-
-        val nearMissThreshold = screenWidth * Constants.NEAR_MISS_DISTANCE_RATIO + player.width * 0.6f
-
+        val thresh = screenWidth * Constants.NEAR_MISS_DISTANCE_RATIO + player.width * 0.6f
         for (car in trafficCars) {
-            if (car.scored) continue
-            val dy = abs(player.y - car.y)
-            val dx = abs(player.x - car.x)
-
-            if (dy < (player.height + car.height) * 0.6f &&
-                dx < nearMissThreshold + car.width * 0.5f &&
-                dx > (player.width + car.width) * 0.45f
-            ) {
-                car.scored = true
-
-                if (now - player.lastComboTime < 2000) {
-                    player.comboCount = min(player.comboCount + 1, Constants.MAX_COMBO)
-                } else {
-                    player.comboCount = 1
-                }
+            if (car.nearMissScored) continue
+            val dy = abs(player.y - car.y); val dx = abs(player.x - car.x)
+            if (dy < (player.height + car.height) * 0.6f && dx < thresh + car.width * 0.5f && dx > (player.width + car.width) * 0.45f) {
+                car.nearMissScored = true; player.nearMissesThisRun++
+                if (now - player.lastComboTime < 2000) player.comboCount = min(player.comboCount + 1, Constants.MAX_COMBO)
+                else player.comboCount = 1
+                if (player.comboCount > player.maxComboThisRun) player.maxComboThisRun = player.comboCount
                 player.lastComboTime = now
-
-                val bonus = (Constants.NEAR_MISS_BONUS *
-                    (1f + player.comboCount * Constants.COMBO_MULTIPLIER)).toLong()
+                val bonus = (Constants.NEAR_MISS_BONUS * (1f + player.comboCount * Constants.COMBO_MULTIPLIER)).toLong()
                 player.coinScore += bonus
-
-                spawnParticles(player.x, player.y - player.height / 2, 5, 0xFF00E676.toInt())
+                player.nosAmount = min(Constants.NOS_MAX, player.nosAmount + Constants.NOS_FILL_ON_NEAR_MISS)
+                slowMoEndTime = now + Constants.SLOW_MO_DURATION_MS; slowMoFactor = Constants.SLOW_MO_FACTOR
+                spawnParticles(player.x, player.y - player.height / 2, 8, 0xFF00E676.toInt())
+                val txt = if (player.comboCount > 1) "x${player.comboCount} COMBO!" else "CLOSE!"
+                val col = if (player.comboCount >= 5) 0xFFFF6D00.toInt() else if (player.comboCount >= 3) 0xFFFFD700.toInt() else 0xFF00E676.toInt()
+                addFloatingText(player.x, player.y - player.height, "+$bonus $txt", col, 1f + player.comboCount * 0.1f)
+                soundManager?.playNearMiss()
             }
         }
+    }
+
+    private fun checkOvertakes(now: Long) {
+        for (car in trafficCars) {
+            if (car.overtakeScored || car.isOncoming) continue
+            if (car.y > player.y + player.height && car.y < player.y + player.height * 3f) {
+                val dx = abs(player.x - car.x)
+                if (dx < laneWidth * 1.5f && player.getEffectiveSpeed() > car.speed * Constants.OVERTAKE_SPEED_THRESHOLD) {
+                    car.overtakeScored = true; player.overtakesThisRun++
+                    player.coinScore += Constants.OVERTAKE_BONUS
+                    player.nosAmount = min(Constants.NOS_MAX, player.nosAmount + Constants.NOS_FILL_ON_OVERTAKE)
+                    addFloatingText(car.x, car.y - car.height, "+${Constants.OVERTAKE_BONUS} OVERTAKE!", 0xFF64FFDA.toInt(), 1.2f)
+                    soundManager?.playNearMiss()
+                }
+            }
+        }
+    }
+
+    private fun checkMissionProgress() {
+        for (m in currentMissions) {
+            if (gameData.isMissionCompleted(m.id)) continue
+            val progress = when (m.type) {
+                MissionType.COLLECT_COINS -> player.coinsCollectedThisRun
+                MissionType.NEAR_MISSES -> player.nearMissesThisRun
+                MissionType.REACH_SPEED -> if (player.maxSpeedReachedThisRun >= m.target) m.target else 0
+                MissionType.TRAVEL_DISTANCE -> player.distanceScore.toInt()
+                MissionType.COLLECT_POWERUPS -> player.powerUpsCollectedThisRun
+                MissionType.DESTROY_HAZARDS -> 0
+                MissionType.REACH_COMBO -> if (player.maxComboThisRun >= m.target) m.target else 0
+            }
+            missionProgress[m.id] = progress
+            if (progress >= m.target) {
+                gameData.completeMission(m.id); gameData.addCoins(m.reward)
+                addFloatingText(screenWidth / 2, screenHeight * 0.2f, "MISSION COMPLETE! +${m.reward}", 0xFF4CAF50.toInt(), 1.8f)
+                soundManager?.playMilestone()
+            }
+        }
+    }
+
+    // ---- Helpers ----
+    private fun dist(x1: Float, y1: Float, x2: Float, y2: Float): Float {
+        val dx = x1 - x2; val dy = y1 - y2; return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
+
+    private fun handleCrash(now: Long, car: TrafficCar) {
+        player.lives--; player.isInvincible = true; player.invincibleEndTime = now + Constants.INVINCIBILITY_AFTER_HIT_MS
+        player.comboCount = 0; player.nosActive = false; player.distanceWithoutCrash = 0f
+        player.speed = max(Constants.IDLE_SPEED, player.speed * 0.5f)
+        spawnParticles((player.x + car.x) / 2f, (player.y + car.y) / 2f, Constants.PARTICLE_COUNT_CRASH, 0xFFFF5722.toInt())
+        addFloatingText(player.x, player.y - player.height, "CRASH!", 0xFFFF1744.toInt(), 1.5f)
+        triggerScreenShake(now); soundManager?.playCrash()
+        if (player.lives <= 0) gameOver()
+    }
+
+    private fun activatePowerUp(pu: PowerUp, now: Long) {
+        val name = when (pu.type) {
+            PowerUpType.SHIELD -> { player.hasShield = true; player.shieldEndTime = now + Constants.SHIELD_DURATION_MS; "SHIELD!" }
+            PowerUpType.MAGNET -> { player.hasMagnet = true; player.magnetEndTime = now + Constants.MAGNET_DURATION_MS; "MAGNET!" }
+            PowerUpType.DOUBLE_SCORE -> { player.hasDoubleScore = true; player.doubleScoreEndTime = now + Constants.DOUBLE_SCORE_DURATION_MS; "2X SCORE!" }
+            PowerUpType.EXTRA_LIFE -> { player.lives = min(player.lives + 1, Constants.MAX_LIVES); "+1 LIFE!" }
+            PowerUpType.NITRO -> { player.nosAmount = Constants.NOS_MAX; "NOS FULL!" }
+        }
+        addFloatingText(pu.x, pu.y - 20f, name, pu.type.color, 1.3f)
+    }
+
+    private fun openMysteryBox(mb: MysteryBox, now: Long) {
+        val roll = Random.nextFloat()
+        when {
+            roll < 0.3f -> { val b = (200..500).random().toLong(); player.coinScore += b; mysteryBoxReward = "+$b coins!"; addFloatingText(mb.x, mb.y - 30f, "+$b", 0xFFFFD700.toInt(), 1.5f) }
+            roll < 0.5f -> { player.hasShield = true; player.shieldEndTime = now + Constants.SHIELD_DURATION_MS; mysteryBoxReward = "Shield!"; addFloatingText(mb.x, mb.y - 30f, "SHIELD!", 0xFF00E5FF.toInt(), 1.5f) }
+            roll < 0.65f -> { player.hasMagnet = true; player.magnetEndTime = now + Constants.MAGNET_DURATION_MS; mysteryBoxReward = "Magnet!"; addFloatingText(mb.x, mb.y - 30f, "MAGNET!", 0xFFFF6F00.toInt(), 1.5f) }
+            roll < 0.8f -> { player.nosAmount = Constants.NOS_MAX; mysteryBoxReward = "NOS Full!"; addFloatingText(mb.x, mb.y - 30f, "NOS FULL!", 0xFF2979FF.toInt(), 1.5f) }
+            roll < 0.9f -> { player.hasDoubleScore = true; player.doubleScoreEndTime = now + Constants.DOUBLE_SCORE_DURATION_MS; mysteryBoxReward = "2x Score!"; addFloatingText(mb.x, mb.y - 30f, "2X SCORE!", 0xFFFFD700.toInt(), 1.5f) }
+            else -> { if (player.lives < Constants.MAX_LIVES) { player.lives++; mysteryBoxReward = "Extra Life!"; addFloatingText(mb.x, mb.y - 30f, "+1 LIFE!", 0xFFE91E63.toInt(), 1.5f) }
+                      else { val b = 1000L; player.coinScore += b; mysteryBoxReward = "+$b coins!"; addFloatingText(mb.x, mb.y - 30f, "+$b", 0xFFFFD700.toInt(), 1.5f) } }
+        }
+        mysteryBoxRewardTime = now
     }
 
     private fun spawnParticles(x: Float, y: Float, count: Int, baseColor: Int) {
@@ -548,72 +645,65 @@ class GameWorld(private val context: Context) {
             val r = ((baseColor shr 16) and 0xFF) + Random.nextInt(-30, 30)
             val g = ((baseColor shr 8) and 0xFF) + Random.nextInt(-30, 30)
             val b = (baseColor and 0xFF) + Random.nextInt(-30, 30)
-            val color = (0xFF shl 24) or
-                (r.coerceIn(0, 255) shl 16) or
-                (g.coerceIn(0, 255) shl 8) or
-                b.coerceIn(0, 255)
-
+            val color = (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
             particles.add(Particle(
-                x = x + (Random.nextFloat() - 0.5f) * 20f,
-                y = y + (Random.nextFloat() - 0.5f) * 20f,
-                vx = kotlin.math.cos(angle) * speed,
-                vy = kotlin.math.sin(angle) * speed,
-                size = 3f + Random.nextFloat() * 8f,
-                color = color,
-                gravity = 0.15f,
+                x = x + (Random.nextFloat() - 0.5f) * 20f, y = y + (Random.nextFloat() - 0.5f) * 20f,
+                vx = kotlin.math.cos(angle) * speed, vy = kotlin.math.sin(angle) * speed,
+                size = 3f + Random.nextFloat() * 8f, color = color, gravity = 0.15f,
                 maxLifetime = Constants.PARTICLE_LIFETIME_MS * (0.5f + Random.nextFloat() * 0.5f)
             ))
         }
     }
 
-    private fun triggerScreenShake(now: Long) {
-        screenShakeEndTime = now + Constants.SCREEN_SHAKE_DURATION_MS.toLong()
+    private fun spawnDriftSpark() {
+        val side = if (player.steerAngle > 0) -1f else 1f
+        driftSparks.add(DriftSpark(
+            x = player.x + side * player.width * 0.4f, y = player.y + player.height * 0.4f,
+            vx = side * (1f + Random.nextFloat() * 3f), vy = Random.nextFloat() * 2f,
+            life = 0.5f + Random.nextFloat() * 0.5f,
+            color = if (Random.nextBoolean()) 0xFFFFAB00.toInt() else 0xFFFF6D00.toInt()
+        ))
     }
+
+    fun addFloatingText(x: Float, y: Float, text: String, color: Int, scale: Float = 1f) {
+        floatingTexts.add(FloatingText(x, y, text, color, System.currentTimeMillis(), scale = scale))
+    }
+
+    private fun triggerScreenShake(now: Long) { screenShakeEndTime = now + Constants.SCREEN_SHAKE_DURATION_MS }
 
     fun gameOver() {
         state = GameState.GAME_OVER
-        if (player.score > highScore) {
-            highScore = player.score
-            highScoreManager.saveHighScore(highScore)
+        val coinsEarned = player.coinsCollectedThisRun.toLong() * Constants.COIN_VALUE + (player.distanceScore * 0.05f).toLong()
+        gameData.onGameEnd(player.score, player.distanceScore, coinsEarned, player.maxComboThisRun, player.maxSpeedReachedThisRun, player.distanceWithoutCrash)
+        newAchievements = gameData.checkAndUnlockAchievements().toMutableList()
+        if (currentMissions.all { gameData.isMissionCompleted(it.id) }) {
+            gameData.missionDifficulty++; currentMissions = MissionBank.generateMissions(gameData.missionDifficulty)
         }
         soundManager?.playGameOver()
     }
 
-    fun moveLeft() {
-        if (player.targetLaneIndex > 0) {
-            player.targetLaneIndex--
-            soundManager?.playLaneSwitch()
-        }
-    }
+    // ---- Controls API ----
+    fun setSteering(input: Float) { player.steerInput = input.coerceIn(-1f, 1f) }
+    fun setAccelerating(active: Boolean) { player.isAccelerating = active }
+    fun setBraking(active: Boolean) { player.isBraking = active }
+    fun activateNOS() { if (player.nosAmount >= Constants.NOS_MIN_TO_ACTIVATE) { player.nosActive = true; soundManager?.playBoost() } }
+    fun deactivateNOS() { player.nosActive = false }
+    fun pause() { if (state == GameState.PLAYING) state = GameState.PAUSED }
+    fun resume() { if (state == GameState.PAUSED) state = GameState.PLAYING }
 
-    fun moveRight() {
-        if (player.targetLaneIndex < Constants.NUM_LANES - 1) {
-            player.targetLaneIndex++
-            soundManager?.playLaneSwitch()
-        }
+    fun selectCar(index: Int) { garageSelectedIndex = index.coerceIn(0, PlayerCarDef.ALL_CARS.size - 1) }
+    fun buyCar(): Boolean {
+        val car = PlayerCarDef.ALL_CARS[garageSelectedIndex]
+        if (gameData.isCarUnlocked(car.id)) return false
+        if (gameData.spendCoins(car.price)) { gameData.unlockCar(car.id); return true }
+        return false
     }
-
-    fun activateBoost() {
-        if (!player.isBoosting) {
-            player.isBoosting = true
-            player.boostEndTime = System.currentTimeMillis() + Constants.BOOST_DURATION_MS
-            soundManager?.playBoost()
-        }
+    fun equipCar() { val car = PlayerCarDef.ALL_CARS[garageSelectedIndex]; if (gameData.isCarUnlocked(car.id)) gameData.selectedCarId = car.id }
+    fun upgradeStat(stat: String): Boolean {
+        val car = PlayerCarDef.ALL_CARS[garageSelectedIndex]; if (!gameData.isCarUnlocked(car.id)) return false
+        val lvl = gameData.getCarUpgradeLevel(car.id, stat); if (lvl >= 5) return false
+        if (gameData.spendCoins(gameData.getUpgradeCost(lvl))) { gameData.setCarUpgradeLevel(car.id, stat, lvl + 1); return true }
+        return false
     }
-
-    fun pause() {
-        if (state == GameState.PLAYING) {
-            state = GameState.PAUSED
-        }
-    }
-
-    fun resume() {
-        if (state == GameState.PAUSED) {
-            state = GameState.PLAYING
-        }
-    }
-
-    fun release() {
-        soundManager?.release()
-    }
+    fun release() { soundManager?.release() }
 }
