@@ -598,8 +598,7 @@ class GameScreen(private val game: TrafficRacerGame) : ScreenAdapter() {
     override fun dispose() {
         modelBatch.dispose()
         shapeRenderer.dispose()
-        carModels.values.toSet().forEach { it.dispose() }
-        fallbackCarModel?.dispose()
+        (carModels.values + listOfNotNull(fallbackCarModel)).toSet().forEach { it.dispose() }
         roadModel?.dispose()
         grassModel?.dispose()
         coinModel?.dispose()
