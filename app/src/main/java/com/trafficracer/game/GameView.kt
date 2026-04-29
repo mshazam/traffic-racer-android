@@ -12,7 +12,8 @@ import kotlin.math.sqrt
 class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
 
     private val gameWorld = GameWorld(context)
-    private val renderer = GameRenderer()
+    private val spriteManager = SpriteManager(context)
+    private val renderer = GameRenderer(spriteManager)
     private var gameThread: GameThread? = null
 
     // Multi-touch tracking
@@ -27,6 +28,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
+        spriteManager.preload()
         gameWorld.init(width.toFloat(), height.toFloat())
         gameThread = GameThread(holder, this).also { it.start() }
     }
@@ -197,7 +199,7 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     fun onPause() { if (gameWorld.state == GameState.PLAYING) gameWorld.pause() }
-    fun onDestroy() { gameWorld.release() }
+    fun onDestroy() { gameWorld.release(); spriteManager.release() }
 
     inner class GameThread(
         private val surfaceHolder: SurfaceHolder,

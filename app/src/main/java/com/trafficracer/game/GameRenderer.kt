@@ -1,8 +1,10 @@
 package com.trafficracer.game
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
@@ -15,13 +17,15 @@ import kotlin.math.min
 import kotlin.math.max
 import kotlin.math.sin
 
-class GameRenderer {
+class GameRenderer(private val spriteManager: SpriteManager) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         typeface = Typeface.create(Typeface.DEFAULT_BOLD, Typeface.BOLD)
     }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
+    private val spriteMatrix = Matrix()
 
     fun render(canvas: Canvas, world: GameWorld) {
         try { renderInternal(canvas, world) } catch (_: Exception) {}
@@ -165,7 +169,7 @@ class GameRenderer {
         }
     }
 
-    // ---- Premium car rendering with 3D shading ----
+    // ---- Premium car rendering with sprites ----
     private fun drawPlayer(canvas: Canvas, world: GameWorld) {
         val p = world.player
         if (p.isInvincible && (System.currentTimeMillis() / 120) % 3 == 0L) return
@@ -178,7 +182,13 @@ class GameRenderer {
         shadowPaint.color = 0x33000000
         canvas.drawOval(RectF(p.x - p.width * 0.55f, p.y + p.height * 0.3f, p.x + p.width * 0.55f, p.y + p.height * 0.55f), shadowPaint)
 
-        drawDetailedCar(canvas, p.x, p.y, p.width, p.height, p.carDef.color, true, p.brakeLightIntensity)
+        val spritePath = spriteManager.getPlayerSprite(p.carDef.id)
+        val sprite = spriteManager.getScaled(spritePath, p.width * 1.1f, p.height * 1.1f)
+        if (sprite != null && !sprite.isRecycled) {
+            canvas.drawBitmap(sprite, p.x - sprite.width / 2f, p.y - sprite.height / 2f, bitmapPaint)
+        } else {
+            drawDetailedCar(canvas, p.x, p.y, p.width, p.height, p.carDef.color, true, p.brakeLightIntensity)
+        }
         canvas.restore()
 
         if (p.hasShield) drawShieldEffect(canvas, p)
@@ -308,8 +318,18 @@ class GameRenderer {
             // Shadow
             shadowPaint.color = 0x22000000
             canvas.drawOval(RectF(car.x - car.width * 0.5f, car.y + car.height * 0.3f, car.x + car.width * 0.5f, car.y + car.height * 0.5f), shadowPaint)
-            if (car.isOncoming) canvas.rotate(180f, car.x, car.y)
-            drawDetailedCar(canvas, car.x, car.y, car.width, car.height, car.color, false)
+
+            val spritePath = spriteManager.getTrafficSprite(car.spriteIndex)
+            val sprite = spriteManager.getScaled(spritePath, car.width * 1.1f, car.height * 1.1f)
+            if (sprite != null && !sprite.isRecycled) {
+                if (car.isOncoming) {
+                    canvas.rotate(180f, car.x, car.y)
+                }
+                canvas.drawBitmap(sprite, car.x - sprite.width / 2f, car.y - sprite.height / 2f, bitmapPaint)
+            } else {
+                if (car.isOncoming) canvas.rotate(180f, car.x, car.y)
+                drawDetailedCar(canvas, car.x, car.y, car.width, car.height, car.color, false)
+            }
             canvas.restore()
         }
     }
@@ -357,24 +377,31 @@ class GameRenderer {
 
     private fun drawHazards(canvas: Canvas, world: GameWorld) {
         for (h in world.hazards) {
-            when (h.type) {
-                HazardType.OIL_SLICK -> {
-                    paint.color = 0x66222222
-                    canvas.drawOval(RectF(h.x - h.size, h.y - h.size * 0.5f, h.x + h.size, h.y + h.size * 0.5f), paint)
-                    paint.color = 0x33555555
-                    canvas.drawOval(RectF(h.x - h.size * 0.6f, h.y - h.size * 0.3f, h.x + h.size * 0.6f, h.y + h.size * 0.3f), paint)
-                }
-                HazardType.CONE -> {
-                    paint.color = 0xFFFF6D00.toInt()
-                    path.reset(); path.moveTo(h.x, h.y - h.size * 0.8f); path.lineTo(h.x - h.size * 0.35f, h.y + h.size * 0.35f); path.lineTo(h.x + h.size * 0.35f, h.y + h.size * 0.35f); path.close()
-                    canvas.drawPath(path, paint)
-                    paint.color = Color.WHITE; canvas.drawRect(h.x - h.size * 0.25f, h.y - h.size * 0.1f, h.x + h.size * 0.25f, h.y + h.size * 0.02f, paint)
-                }
-                HazardType.POTHOLE -> {
-                    paint.color = 0xFF111111.toInt()
-                    canvas.drawOval(RectF(h.x - h.size * 0.55f, h.y - h.size * 0.35f, h.x + h.size * 0.55f, h.y + h.size * 0.35f), paint)
-                    paint.color = 0xFF2A2A2A.toInt()
-                    canvas.drawOval(RectF(h.x - h.size * 0.4f, h.y - h.size * 0.25f, h.x + h.size * 0.4f, h.y + h.size * 0.25f), paint)
+            val spriteKey = when (h.type) {
+                HazardType.OIL_SLICK -> "oil"
+                HazardType.CONE -> "cone"
+                HazardType.POTHOLE -> "rock"
+            }
+            val sprite = spriteManager.objectSprites[spriteKey]?.let {
+                spriteManager.getScaled(it, h.size * 1.5f, h.size * 1.5f)
+            }
+            if (sprite != null && !sprite.isRecycled) {
+                canvas.drawBitmap(sprite, h.x - sprite.width / 2f, h.y - sprite.height / 2f, bitmapPaint)
+            } else {
+                when (h.type) {
+                    HazardType.OIL_SLICK -> {
+                        paint.color = 0x66222222
+                        canvas.drawOval(RectF(h.x - h.size, h.y - h.size * 0.5f, h.x + h.size, h.y + h.size * 0.5f), paint)
+                    }
+                    HazardType.CONE -> {
+                        paint.color = 0xFFFF6D00.toInt()
+                        path.reset(); path.moveTo(h.x, h.y - h.size * 0.8f); path.lineTo(h.x - h.size * 0.35f, h.y + h.size * 0.35f); path.lineTo(h.x + h.size * 0.35f, h.y + h.size * 0.35f); path.close()
+                        canvas.drawPath(path, paint)
+                    }
+                    HazardType.POTHOLE -> {
+                        paint.color = 0xFF111111.toInt()
+                        canvas.drawOval(RectF(h.x - h.size * 0.55f, h.y - h.size * 0.35f, h.x + h.size * 0.55f, h.y + h.size * 0.35f), paint)
+                    }
                 }
             }
         }
@@ -736,12 +763,18 @@ class GameRenderer {
         textPaint.textSize = sw * 0.035f; textPaint.color = 0xFF00E5FF.toInt()
         canvas.drawText("NFS EDITION", sw / 2, titleY + sw * 0.19f, textPaint)
 
-        // Car preview with shadow
+        // Car preview with sprite
         val carY = sh * 0.4f; val bob = sin(t * 0.003) * 6f
         val selCar = world.gameData.getSelectedCar()
         shadowPaint.color = 0x22000000
         canvas.drawOval(RectF(sw / 2 - sw * 0.12f, carY + sh * 0.06f, sw / 2 + sw * 0.12f, carY + sh * 0.09f), shadowPaint)
-        drawDetailedCar(canvas, sw / 2, carY + bob.toFloat(), sw * 0.17f, sh * 0.095f, selCar.color, true)
+        val carW = sw * 0.17f; val carH = sh * 0.095f
+        val startSprite = spriteManager.getScaled(spriteManager.getPlayerSprite(selCar.id), carW * 1.3f, carH * 1.3f)
+        if (startSprite != null && !startSprite.isRecycled) {
+            canvas.drawBitmap(startSprite, sw / 2 - startSprite.width / 2f, carY + bob.toFloat() - startSprite.height / 2f, bitmapPaint)
+        } else {
+            drawDetailedCar(canvas, sw / 2, carY + bob.toFloat(), carW, carH, selCar.color, true)
+        }
 
         // Buttons
         val btnW = sw * 0.52f; val btnH = sh * 0.06f
@@ -800,11 +833,17 @@ class GameRenderer {
         val unlocked = world.gameData.isCarUnlocked(car.id)
         val equipped = world.gameData.selectedCarId == car.id
 
-        // Car preview
+        // Car preview with sprite
         val carY = sh * 0.27f; val bob = sin(System.currentTimeMillis() * 0.003) * 4f
         shadowPaint.color = 0x22000000
         canvas.drawOval(RectF(sw / 2 - sw * 0.14f, carY + sh * 0.07f, sw / 2 + sw * 0.14f, carY + sh * 0.1f), shadowPaint)
-        drawDetailedCar(canvas, sw / 2, carY + bob.toFloat(), sw * 0.2f, sh * 0.12f, car.color, true)
+        val gcW = sw * 0.2f; val gcH = sh * 0.12f
+        val garageSprite = spriteManager.getScaled(spriteManager.getPlayerSprite(car.id), gcW * 1.4f, gcH * 1.4f)
+        if (garageSprite != null && !garageSprite.isRecycled) {
+            canvas.drawBitmap(garageSprite, sw / 2 - garageSprite.width / 2f, carY + bob.toFloat() - garageSprite.height / 2f, bitmapPaint)
+        } else {
+            drawDetailedCar(canvas, sw / 2, carY + bob.toFloat(), gcW, gcH, car.color, true)
+        }
 
         // Name & desc
         textPaint.textSize = sw * 0.055f; textPaint.color = Color.WHITE

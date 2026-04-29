@@ -78,7 +78,8 @@ data class TrafficCar(
     var color: Int = 0,
     var nearMissScored: Boolean = false,
     var overtakeScored: Boolean = false,
-    var isOncoming: Boolean = false
+    var isOncoming: Boolean = false,
+    var spriteIndex: Int = 0
 ) {
     fun getRect(): RectF = RectF(x - width / 2, y - height / 2, x + width / 2, y + height / 2)
 }

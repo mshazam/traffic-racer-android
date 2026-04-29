@@ -332,7 +332,8 @@ class GameWorld(private val context: Context) {
                 x = laneX, y = if (isOncoming) screenHeight + baseH * type.heightMult else -baseH * type.heightMult,
                 width = baseW * type.widthMult, height = baseH * type.heightMult,
                 speed = spd, laneIndex = lane, type = type,
-                color = trafficColors[Random.nextInt(trafficColors.size)], isOncoming = isOncoming
+                color = trafficColors[Random.nextInt(trafficColors.size)], isOncoming = isOncoming,
+                spriteIndex = Random.nextInt(12)
             ))
         }
         if (Random.nextFloat() < Constants.COIN_SPAWN_CHANCE) spawnCoin()
