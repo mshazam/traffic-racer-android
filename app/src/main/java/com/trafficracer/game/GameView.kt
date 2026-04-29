@@ -1,15 +1,20 @@
 package com.trafficracer.game
 
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.graphics.Canvas
 import android.graphics.PixelFormat
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import kotlin.math.abs
 import kotlin.math.sqrt
 
-class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback {
+class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback, SensorEventListener {
 
     private val gameWorld = GameWorld(context)
     private val spriteManager = SpriteManager(context)
@@ -17,6 +22,10 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     private var gameThread: GameThread? = null
 
     private val pointerActions = mutableMapOf<Int, PointerAction>()
+    private var sensorManager: SensorManager? = null
+    private var accelerometer: Sensor? = null
+    private var tiltX: Float = 0f
+    var onOrientationChanged: ((Boolean) -> Unit)? = null
 
     private enum class PointerAction { GAS, BRAKE, STEER, NOS, LEFT, RIGHT, NONE }
 
@@ -24,11 +33,14 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         holder.addCallback(this)
         holder.setFormat(PixelFormat.RGBA_8888)
         isFocusable = true
+        sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         spriteManager.preload()
         gameWorld.init(width.toFloat(), height.toFloat())
+        sensorManager?.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
         gameThread = GameThread(holder, this).also { it.start() }
     }
 
@@ -46,11 +58,16 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
     }
 
     fun update(deltaTime: Float) {
-        // Auto-gas for SIMPLE and ARCADE schemes
         if (gameWorld.state == GameState.PLAYING) {
             when (gameWorld.controlScheme) {
-                ControlScheme.SIMPLE, ControlScheme.ARCADE -> gameWorld.setAccelerating(true)
-                ControlScheme.NFS -> {} // manual gas
+                ControlScheme.SIMPLE -> {
+                    gameWorld.setAccelerating(true)
+                    // Tilt steering from accelerometer
+                    val steer = (tiltX / 4f).coerceIn(-1f, 1f)
+                    gameWorld.setSteering(steer)
+                }
+                ControlScheme.ARCADE -> gameWorld.setAccelerating(true)
+                ControlScheme.NFS -> {}
             }
         }
         gameWorld.update(deltaTime)
@@ -189,9 +206,9 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
 
         // Control scheme cards
         val schemes = ControlScheme.entries
-        val cardH = sh * 0.13f; val cardW = sw * 0.88f; val startY = sh * 0.15f
+        val cardH = sh * 0.10f; val cardW = sw * 0.88f; val startY = sh * 0.15f
         for (i in schemes.indices) {
-            val cardTop = startY + i * (cardH + sh * 0.02f)
+            val cardTop = startY + i * (cardH + sh * 0.015f)
             val cardLeft = (sw - cardW) / 2
             if (tx > cardLeft && tx < cardLeft + cardW && ty > cardTop && ty < cardTop + cardH) {
                 gameWorld.applyControlScheme(schemes[i]); return
@@ -199,15 +216,24 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         }
 
         // Perspective toggle
-        val toggleY = startY + schemes.size * (cardH + sh * 0.02f) + sh * 0.04f
-        val perspY = toggleY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
+        val toggleBaseY = startY + schemes.size * (cardH + sh * 0.015f) + sh * 0.03f
+        val perspY = toggleBaseY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
         val perspLeft = (sw - perspW) / 2
         if (tx > perspLeft && tx < perspLeft + perspW && ty > perspY && ty < perspY + perspH) {
             gameWorld.togglePerspective(); return
         }
 
+        // Orientation toggle
+        val orientY = perspY + perspH + sh * 0.02f; val orientW = sw * 0.88f; val orientH = sh * 0.06f
+        val orientLeft = (sw - orientW) / 2
+        if (tx > orientLeft && tx < orientLeft + orientW && ty > orientY && ty < orientY + orientH) {
+            gameWorld.toggleOrientation()
+            onOrientationChanged?.invoke(gameWorld.orientationPortrait)
+            return
+        }
+
         // Back button
-        val backY = sh * 0.87f
+        val backY = sh * 0.90f
         if (abs(tx - sw / 2) < btnW / 2 && abs(ty - backY) < btnH) { gameWorld.closeSettings(); return }
     }
 
@@ -247,9 +273,23 @@ class GameView(context: Context) : SurfaceView(context), SurfaceHolder.Callback 
         gameWorld.state = GameState.START_SCREEN
     }
 
-    private fun openSettings() { gameWorld.openSettings() }
-    fun onPause() { if (gameWorld.state == GameState.PLAYING) gameWorld.pause() }
-    fun onDestroy() { gameWorld.release(); spriteManager.release() }
+    // Sensor callbacks for tilt steering
+    override fun onSensorChanged(event: SensorEvent?) {
+        event?.let { if (it.sensor.type == Sensor.TYPE_ACCELEROMETER) tiltX = -it.values[0] }
+    }
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    fun onPause() {
+        if (gameWorld.state == GameState.PLAYING) gameWorld.pause()
+        sensorManager?.unregisterListener(this)
+    }
+    fun onResume() {
+        sensorManager?.registerListener(this, accelerometer, SensorManager.SENSOR_DELAY_GAME)
+    }
+    fun onDestroy() {
+        sensorManager?.unregisterListener(this)
+        gameWorld.release(); spriteManager.release()
+    }
 
     inner class GameThread(
         private val surfaceHolder: SurfaceHolder,

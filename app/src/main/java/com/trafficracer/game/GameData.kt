@@ -56,6 +56,10 @@ class GameData(context: Context) {
         get() = prefs.getBoolean("perspective_enabled", true)
         set(value) = prefs.edit().putBoolean("perspective_enabled", value).apply()
 
+    var orientationPortrait: Boolean
+        get() = prefs.getBoolean("orientation_portrait", true)
+        set(value) = prefs.edit().putBoolean("orientation_portrait", value).apply()
+
     fun isCarUnlocked(carId: String): Boolean {
         if (carId == "starter") return true
         return prefs.getBoolean("car_unlocked_$carId", false)

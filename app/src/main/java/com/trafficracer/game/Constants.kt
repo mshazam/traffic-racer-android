@@ -12,11 +12,11 @@ object Constants {
     const val PLAYER_HEIGHT_RATIO = 0.065f
 
     // NFS-style speed physics
-    const val INITIAL_SPEED = 5f
+    const val INITIAL_SPEED = 3f
     const val MAX_SPEED = 35f
-    const val IDLE_SPEED = 3f
-    const val ACCEL_FORCE = 0.18f
-    const val BRAKE_FORCE = 0.30f
+    const val IDLE_SPEED = 2f
+    const val ACCEL_FORCE = 0.06f
+    const val BRAKE_FORCE = 0.45f
     const val COAST_DECEL = 0.04f
     const val ENGINE_BRAKE = 0.06f
 
@@ -58,7 +58,9 @@ object Constants {
 
     const val INITIAL_LIVES = 3
     const val MAX_LIVES = 5
-    const val INVINCIBILITY_AFTER_HIT_MS = 2000L
+    const val INVINCIBILITY_AFTER_HIT_MS = 2500L
+    const val CRASH_SPEED_PENALTY = 0.15f
+    const val CRASH_FREEZE_MS = 600L
 
     const val NEAR_MISS_DISTANCE_RATIO = 0.025f
     const val NEAR_MISS_BONUS = 50
@@ -84,8 +86,8 @@ object Constants {
 
     const val DISTANCE_SCORE_FACTOR = 0.1f
 
-    const val SCREEN_SHAKE_INTENSITY = 12f
-    const val SCREEN_SHAKE_DURATION_MS = 300L
+    const val SCREEN_SHAKE_INTENSITY = 18f
+    const val SCREEN_SHAKE_DURATION_MS = 500L
 
     const val HAZARD_SPAWN_CHANCE = 0.05f
     const val HAZARD_SIZE_RATIO = 0.045f
@@ -100,7 +102,7 @@ object Constants {
     const val WEATHER_PARTICLE_COUNT = 80
     const val WEATHER_PARTICLE_SPEED = 15f
 
-    const val ENV_CHANGE_DISTANCE = 2500f
+    const val ENV_CHANGE_DISTANCE = 12000f
     const val MILESTONE_INTERVAL = 1000L
 
     const val CAMERA_ZOOM_BOOST = 1.04f
@@ -127,8 +129,8 @@ enum class GameState {
 
 enum class ControlScheme(val displayName: String, val description: String) {
     NFS("NFS Style", "Steering wheel + Gas/Brake pedals + NOS button"),
-    SIMPLE("Simple", "Auto gas • Brake anywhere • Left/Right buttons"),
-    ARCADE("Arcade", "Left/Right buttons • Brake anywhere • Auto gas")
+    SIMPLE("Simple", "Tilt to steer \u2022 Auto gas \u2022 Tap to brake"),
+    ARCADE("Arcade", "Left/Right buttons \u2022 Auto gas \u2022 Tap to brake")
 }
 
 enum class CarType(val widthMult: Float, val heightMult: Float, val speedMult: Float) {

@@ -41,7 +41,8 @@ data class PlayerCar(
     var comboCount: Int = 0,
     var maxComboThisRun: Int = 0,
     var lastComboTime: Long = 0,
-    var carDef: PlayerCarDef = PlayerCarDef.ALL_CARS[0]
+    var carDef: PlayerCarDef = PlayerCarDef.ALL_CARS[0],
+    var crashFreezeEnd: Long = 0
 ) {
     fun getRect(): RectF = RectF(x - width / 2, y - height / 2, x + width / 2, y + height / 2)
 
@@ -79,7 +80,10 @@ data class TrafficCar(
     var nearMissScored: Boolean = false,
     var overtakeScored: Boolean = false,
     var isOncoming: Boolean = false,
-    var spriteIndex: Int = 0
+    var spriteIndex: Int = 0,
+    var targetLane: Int = -1,
+    var laneChangeProgress: Float = 0f,
+    var nextLaneChangeTime: Long = 0
 ) {
     fun getRect(): RectF = RectF(x - width / 2, y - height / 2, x + width / 2, y + height / 2)
 }

@@ -47,13 +47,13 @@ class GameRenderer(private val spriteManager: SpriteManager) {
             // Apply 3D perspective tilt
             canvas.save()
             perspCamera.save()
-            perspCamera.setLocation(0f, 0f, -12f)
-            perspCamera.rotateX(28f) // tilt angle for road perspective
+            perspCamera.setLocation(0f, 0f, -16f)
+            perspCamera.rotateX(15f) // gentler tilt for cleaner perspective
             perspCamera.getMatrix(perspMatrix)
             perspCamera.restore()
             // Pivot at bottom center of screen
             perspMatrix.preTranslate(-world.screenWidth / 2f, -world.screenHeight)
-            perspMatrix.postTranslate(world.screenWidth / 2f, world.screenHeight * 1.02f)
+            perspMatrix.postTranslate(world.screenWidth / 2f, world.screenHeight * 1.01f)
             canvas.concat(perspMatrix)
 
             drawGrass(canvas, world, env)
@@ -684,17 +684,28 @@ class GameRenderer(private val spriteManager: SpriteManager) {
     private fun drawControlsSimple(canvas: Canvas, world: GameWorld) {
         val sw = world.screenWidth; val sh = world.screenHeight
         val (controlsTop, controlsH) = drawControlsBg(canvas, sw, sh)
-        val btnW = sw * 0.22f; val btnH = controlsH * 0.65f; val btnY = controlsTop + (controlsH - btnH) / 2
-        drawPedal(canvas, sw * 0.03f, btnY, btnW, btnH, "\u25C0 LEFT",
-            if (world.player.steerAngle < -0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
-            if (world.player.steerAngle < -0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
-        drawPedal(canvas, sw - sw * 0.03f - btnW, btnY, btnW, btnH, "RIGHT \u25B6",
-            if (world.player.steerAngle > 0.1f) 0xDD42A5F5.toInt() else 0x5542A5F5.toInt(),
-            if (world.player.steerAngle > 0.1f) 0xFF42A5F5.toInt() else 0x8842A5F5.toInt())
-        textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFF00E676.toInt(); textPaint.textSize = controlsH * 0.14f
-        canvas.drawText("AUTO GAS", sw / 2, controlsTop + controlsH * 0.25f, textPaint)
-        textPaint.color = if (world.player.isBraking) 0xFFFF1744.toInt() else 0x66FFFFFF.toInt(); textPaint.textSize = controlsH * 0.12f
-        canvas.drawText(if (world.player.isBraking) "BRAKING" else "Tap center to brake", sw / 2, controlsTop + controlsH * 0.45f, textPaint)
+
+        // Tilt indicator bar
+        val barW = sw * 0.5f; val barH = controlsH * 0.12f
+        val barX = (sw - barW) / 2; val barY = controlsTop + controlsH * 0.15f
+        paint.color = 0x33FFFFFF
+        canvas.drawRoundRect(RectF(barX, barY, barX + barW, barY + barH), barH / 2, barH / 2, paint)
+        // Tilt indicator dot
+        val dotPos = (sw / 2f + world.player.steerAngle / Constants.MAX_STEER_ANGLE * barW * 0.45f)
+        paint.color = 0xFF42A5F5.toInt()
+        canvas.drawCircle(dotPos, barY + barH / 2, barH * 0.7f, paint)
+
+        textPaint.textAlign = Paint.Align.CENTER; textPaint.textSize = controlsH * 0.11f
+        textPaint.color = 0x88FFFFFF.toInt()
+        canvas.drawText("TILT TO STEER", sw / 2, controlsTop + controlsH * 0.50f, textPaint)
+
+        textPaint.color = 0xFF00E676.toInt(); textPaint.textSize = controlsH * 0.13f
+        canvas.drawText("AUTO GAS", sw * 0.15f, controlsTop + controlsH * 0.80f, textPaint)
+
+        textPaint.color = if (world.player.isBraking) 0xFFFF1744.toInt() else 0x66FFFFFF.toInt()
+        textPaint.textSize = controlsH * 0.13f
+        canvas.drawText(if (world.player.isBraking) "BRAKING" else "TAP TO BRAKE", sw * 0.85f, controlsTop + controlsH * 0.80f, textPaint)
+
         drawNOSButton(canvas, world, controlsTop, controlsH)
     }
 
@@ -761,7 +772,16 @@ class GameRenderer(private val spriteManager: SpriteManager) {
                     nosCx = nosCx, nosCy = nosCy, nosRadius = ns * 1.5f, pauseArea = pauseR,
                     leftButton = RectF(), rightButton = RectF(), brakeZone = RectF(), scheme = ControlScheme.NFS)
             }
-            ControlScheme.SIMPLE, ControlScheme.ARCADE -> {
+            ControlScheme.SIMPLE -> {
+                // Tilt mode: whole bottom area is brake zone, no L/R buttons
+                ControlAreas(brake = RectF(), gas = RectF(),
+                    steerLeft = 0f, steerRight = 0f, steerCy = 0f,
+                    nosCx = nosCx, nosCy = nosCy, nosRadius = ns * 1.5f, pauseArea = pauseR,
+                    leftButton = RectF(), rightButton = RectF(),
+                    brakeZone = RectF(0f, ct, sw, sh),
+                    scheme = ControlScheme.SIMPLE)
+            }
+            ControlScheme.ARCADE -> {
                 val btnW = sw * 0.22f; val btnH = ch * 0.65f; val btnY = ct + (ch - btnH) / 2
                 ControlAreas(brake = RectF(), gas = RectF(),
                     steerLeft = 0f, steerRight = 0f, steerCy = 0f,
@@ -769,7 +789,7 @@ class GameRenderer(private val spriteManager: SpriteManager) {
                     leftButton = RectF(sw * 0.03f, btnY, sw * 0.03f + btnW, btnY + btnH),
                     rightButton = RectF(sw - sw * 0.03f - btnW, btnY, sw - sw * 0.03f, btnY + btnH),
                     brakeZone = RectF(sw * 0.03f + btnW, ct, sw - sw * 0.03f - btnW, sh),
-                    scheme = world.controlScheme)
+                    scheme = ControlScheme.ARCADE)
             }
         }
     }
@@ -1077,65 +1097,70 @@ class GameRenderer(private val spriteManager: SpriteManager) {
         canvas.drawText("CONTROL SCHEME", sw / 2, sh * 0.12f, textPaint)
 
         val schemes = ControlScheme.entries
-        val cardH = sh * 0.13f; val cardW = sw * 0.88f; val startY = sh * 0.15f
+        val cardH = sh * 0.10f; val cardW = sw * 0.88f; val startY = sh * 0.15f
         for (i in schemes.indices) {
-            val scheme = schemes[i]; val cy = startY + i * (cardH + sh * 0.02f)
+            val scheme = schemes[i]; val cy = startY + i * (cardH + sh * 0.015f)
             val selected = world.controlScheme == scheme
             val cardLeft = (sw - cardW) / 2; val cardTop = cy; val cardBottom = cy + cardH; val cr = 12f
 
-            // Card background
             paint.color = if (selected) 0x552979FF else 0x33263238
             canvas.drawRoundRect(RectF(cardLeft, cardTop, cardLeft + cardW, cardBottom), cr, cr, paint)
-            // Selection border
             if (selected) {
                 paint.style = Paint.Style.STROKE; paint.strokeWidth = 2.5f; paint.color = 0xFF2979FF.toInt()
                 canvas.drawRoundRect(RectF(cardLeft, cardTop, cardLeft + cardW, cardBottom), cr, cr, paint)
                 paint.style = Paint.Style.FILL
             }
 
-            // Radio circle
             val radioX = cardLeft + sw * 0.06f; val radioY = cardTop + cardH / 2
             paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = if (selected) 0xFF2979FF.toInt() else 0x88FFFFFF.toInt()
             canvas.drawCircle(radioX, radioY, sw * 0.02f, paint); paint.style = Paint.Style.FILL
             if (selected) { paint.color = 0xFF2979FF.toInt(); canvas.drawCircle(radioX, radioY, sw * 0.012f, paint) }
 
-            // Scheme name
-            textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.04f
+            textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.038f
             textPaint.color = if (selected) 0xFFFFFFFF.toInt() else 0xDDFFFFFF.toInt()
-            canvas.drawText(scheme.displayName, cardLeft + sw * 0.11f, cardTop + cardH * 0.4f, textPaint)
-            // Description
-            textPaint.textSize = sw * 0.025f; textPaint.color = 0x99FFFFFF.toInt()
-            canvas.drawText(scheme.description, cardLeft + sw * 0.11f, cardTop + cardH * 0.7f, textPaint)
+            canvas.drawText(scheme.displayName, cardLeft + sw * 0.11f, cardTop + cardH * 0.42f, textPaint)
+            textPaint.textSize = sw * 0.024f; textPaint.color = 0x99FFFFFF.toInt()
+            canvas.drawText(scheme.description, cardLeft + sw * 0.11f, cardTop + cardH * 0.72f, textPaint)
         }
 
-        // Perspective toggle
-        val toggleY = startY + schemes.size * (cardH + sh * 0.02f) + sh * 0.04f
+        // Section: Display
+        val toggleBaseY = startY + schemes.size * (cardH + sh * 0.015f) + sh * 0.03f
         textPaint.textAlign = Paint.Align.CENTER; textPaint.color = 0xFFFF6F00.toInt(); textPaint.textSize = sw * 0.04f
-        canvas.drawText("CAMERA", sw / 2, toggleY, textPaint)
+        canvas.drawText("DISPLAY", sw / 2, toggleBaseY, textPaint)
 
-        val perspY = toggleY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
+        // 3D Perspective toggle
+        val perspY = toggleBaseY + sh * 0.04f; val perspW = sw * 0.88f; val perspH = sh * 0.06f
         val perspLeft = (sw - perspW) / 2
-        paint.color = if (world.perspectiveEnabled) 0x552979FF else 0x33263238
-        canvas.drawRoundRect(RectF(perspLeft, perspY, perspLeft + perspW, perspY + perspH), 12f, 12f, paint)
-        if (world.perspectiveEnabled) {
-            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = 0xFF2979FF.toInt()
-            canvas.drawRoundRect(RectF(perspLeft, perspY, perspLeft + perspW, perspY + perspH), 12f, 12f, paint)
-            paint.style = Paint.Style.FILL
-        }
-        // Toggle
-        val toggleX = perspLeft + perspW - sw * 0.08f; val toggleCy = perspY + perspH / 2
-        val toggleW = sw * 0.06f; val toggleH2 = perspH * 0.35f
-        paint.color = if (world.perspectiveEnabled) 0xFF2979FF.toInt() else 0xFF555555.toInt()
-        canvas.drawRoundRect(RectF(toggleX, toggleCy - toggleH2, toggleX + toggleW, toggleCy + toggleH2), toggleH2, toggleH2, paint)
-        val knobX = if (world.perspectiveEnabled) toggleX + toggleW - toggleH2 else toggleX + toggleH2
-        paint.color = Color.WHITE; canvas.drawCircle(knobX, toggleCy, toggleH2 * 0.9f, paint)
+        drawToggleRow(canvas, "3D Perspective", perspLeft, perspY, perspW, perspH, world.perspectiveEnabled, sw)
 
-        textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.035f; textPaint.color = Color.WHITE
-        canvas.drawText("3D Perspective", perspLeft + sw * 0.04f, perspY + perspH * 0.62f, textPaint)
+        // Orientation toggle
+        val orientY = perspY + perspH + sh * 0.02f; val orientW = sw * 0.88f; val orientH = sh * 0.06f
+        val orientLeft = (sw - orientW) / 2
+        val orientLabel = if (world.orientationPortrait) "Orientation: Portrait" else "Orientation: Landscape"
+        drawToggleRow(canvas, orientLabel, orientLeft, orientY, orientW, orientH, world.orientationPortrait, sw)
 
         // Back button
         val btnW = sw * 0.48f; val btnH = sh * 0.055f
-        drawMenuButton(canvas, sw / 2, sh * 0.87f, btnW, btnH, "BACK", 0x55FFFFFF, 0x44FFFFFF)
+        drawMenuButton(canvas, sw / 2, sh * 0.90f, btnW, btnH, "BACK", 0x55FFFFFF, 0x44FFFFFF)
+    }
+
+    private fun drawToggleRow(canvas: Canvas, label: String, left: Float, top: Float, w: Float, h: Float, enabled: Boolean, sw: Float) {
+        paint.color = if (enabled) 0x552979FF else 0x33263238
+        canvas.drawRoundRect(RectF(left, top, left + w, top + h), 12f, 12f, paint)
+        if (enabled) {
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f; paint.color = 0xFF2979FF.toInt()
+            canvas.drawRoundRect(RectF(left, top, left + w, top + h), 12f, 12f, paint)
+            paint.style = Paint.Style.FILL
+        }
+        val toggleX = left + w - sw * 0.08f; val toggleCy = top + h / 2
+        val toggleW = sw * 0.06f; val toggleH2 = h * 0.35f
+        paint.color = if (enabled) 0xFF2979FF.toInt() else 0xFF555555.toInt()
+        canvas.drawRoundRect(RectF(toggleX, toggleCy - toggleH2, toggleX + toggleW, toggleCy + toggleH2), toggleH2, toggleH2, paint)
+        val knobX = if (enabled) toggleX + toggleW - toggleH2 else toggleX + toggleH2
+        paint.color = Color.WHITE; canvas.drawCircle(knobX, toggleCy, toggleH2 * 0.9f, paint)
+
+        textPaint.textAlign = Paint.Align.LEFT; textPaint.textSize = sw * 0.035f; textPaint.color = Color.WHITE
+        canvas.drawText(label, left + sw * 0.04f, top + h * 0.62f, textPaint)
     }
 
     // ---- Helpers ----

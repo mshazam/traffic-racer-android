@@ -49,6 +49,7 @@ class GameWorld(private val context: Context) {
     var newAchievements = mutableListOf<AchievementDef>()
     var controlScheme: ControlScheme = ControlScheme.NFS
     var perspectiveEnabled: Boolean = true
+    var orientationPortrait: Boolean = true
 
     private var screenShakeEndTime: Long = 0
     private var lastTrafficSpawn: Long = 0
@@ -77,6 +78,7 @@ class GameWorld(private val context: Context) {
         garageSelectedIndex = PlayerCarDef.ALL_CARS.indexOfFirst { it.id == gameData.selectedCarId }.coerceAtLeast(0)
         controlScheme = gameData.controlScheme
         perspectiveEnabled = gameData.perspectiveEnabled
+        orientationPortrait = gameData.orientationPortrait
 
         initRoadMarkings()
         initScenery()
@@ -206,13 +208,20 @@ class GameWorld(private val context: Context) {
 
     // ---- NFS Physics ----
     private fun updateSpeed(dt: Float) {
-        val accel = when {
-            player.isAccelerating -> Constants.ACCEL_FORCE * player.carDef.baseSpeed
-            player.isBraking -> -Constants.BRAKE_FORCE
-            else -> -Constants.COAST_DECEL
+        // Crash freeze: no speed changes during freeze
+        if (System.currentTimeMillis() < player.crashFreezeEnd) return
+
+        if (player.isBraking) {
+            // Strong braking — always decelerates
+            player.speed -= Constants.BRAKE_FORCE * dt * 60f
+        } else if (player.isAccelerating) {
+            // Gradual acceleration
+            val accel = Constants.ACCEL_FORCE * player.carDef.baseSpeed
+            player.speed += accel * dt * 60f
+        } else {
+            // Coasting — slow decel
+            player.speed -= Constants.COAST_DECEL * dt * 60f
         }
-        player.speed += accel * dt * 60f
-        player.speed += Constants.IDLE_SPEED * 0.01f * dt * 60f
         player.speed = player.speed.coerceIn(Constants.IDLE_SPEED, Constants.MAX_SPEED * player.carDef.baseSpeed)
     }
 
@@ -288,7 +297,7 @@ class GameWorld(private val context: Context) {
         val nextIndex = (envs.indexOf(currentEnvironment) + 1) % envs.size
         currentEnvironment = envs[nextIndex]
         initScenery(); initWeatherParticles()
-        addFloatingText(screenWidth / 2, screenHeight * 0.3f, currentEnvironment.displayName, 0xFFFFFFFF.toInt(), 2.0f)
+        // No on-screen text for environment changes
     }
 
     private fun updatePowerUpTimers(now: Long) {
@@ -315,6 +324,43 @@ class GameWorld(private val context: Context) {
             val car = iter.next()
             if (car.isOncoming) car.y += (effectiveSpeed + car.speed) * deltaTime * 60f
             else car.y += (effectiveSpeed - car.speed) * deltaTime * 60f
+
+            // Lane-changing AI: traffic cars change lanes to block player
+            if (!car.isOncoming && car.y > 0 && car.y < screenHeight) {
+                if (car.targetLane < 0 && now > car.nextLaneChangeTime) {
+                    // Chance to change lane, biased toward player's lane
+                    if (Random.nextFloat() < 0.008f) {
+                        val playerLane = ((player.x - roadLeft) / laneWidth).toInt().coerceIn(0, Constants.NUM_LANES - 1)
+                        val possibleLanes = mutableListOf<Int>()
+                        if (car.laneIndex > 0) possibleLanes.add(car.laneIndex - 1)
+                        if (car.laneIndex < Constants.NUM_LANES - 1) possibleLanes.add(car.laneIndex + 1)
+                        // Bias toward player's lane 60% of the time
+                        val targetLane = if (possibleLanes.contains(playerLane) && Random.nextFloat() < 0.6f) {
+                            playerLane
+                        } else {
+                            possibleLanes.randomOrNull() ?: car.laneIndex
+                        }
+                        if (targetLane != car.laneIndex) {
+                            car.targetLane = targetLane
+                            car.laneChangeProgress = 0f
+                        }
+                    }
+                }
+                // Execute lane change
+                if (car.targetLane >= 0) {
+                    car.laneChangeProgress += deltaTime * 1.5f
+                    val targetX = getLaneCenter(car.targetLane)
+                    car.x += (targetX - car.x) * min(car.laneChangeProgress * 2f, 1f) * deltaTime * 4f
+                    if (car.laneChangeProgress >= 1f || abs(car.x - targetX) < 2f) {
+                        car.x = targetX
+                        car.laneIndex = car.targetLane
+                        car.targetLane = -1
+                        car.laneChangeProgress = 0f
+                        car.nextLaneChangeTime = now + 3000 + Random.nextLong(5000)
+                    }
+                }
+            }
+
             if (car.y > screenHeight + car.height || car.y < -car.height * 3) iter.remove()
         }
     }
@@ -617,9 +663,15 @@ class GameWorld(private val context: Context) {
     private fun handleCrash(now: Long, car: TrafficCar) {
         player.lives--; player.isInvincible = true; player.invincibleEndTime = now + Constants.INVINCIBILITY_AFTER_HIT_MS
         player.comboCount = 0; player.nosActive = false; player.distanceWithoutCrash = 0f
-        player.speed = max(Constants.IDLE_SPEED, player.speed * 0.5f)
-        spawnParticles((player.x + car.x) / 2f, (player.y + car.y) / 2f, Constants.PARTICLE_COUNT_CRASH, 0xFFFF5722.toInt())
-        addFloatingText(player.x, player.y - player.height, "CRASH!", 0xFFFF1744.toInt(), 1.5f)
+        // Severe speed penalty — drop to near-idle
+        player.speed = max(Constants.IDLE_SPEED, player.speed * Constants.CRASH_SPEED_PENALTY)
+        // Freeze controls briefly to feel the impact
+        player.crashFreezeEnd = now + Constants.CRASH_FREEZE_MS
+        // Big particle explosion
+        spawnParticles((player.x + car.x) / 2f, (player.y + car.y) / 2f, Constants.PARTICLE_COUNT_CRASH * 2, 0xFFFF5722.toInt())
+        spawnParticles(player.x, player.y, 20, 0xFF333333.toInt()) // smoke
+        addFloatingText(player.x, player.y - player.height, "CRASH!", 0xFFFF1744.toInt(), 2.0f)
+        addFloatingText(player.x, player.y - player.height * 1.8f, "-1 LIFE", 0xFFFF1744.toInt(), 1.2f)
         triggerScreenShake(now); soundManager?.playCrash()
         if (player.lives <= 0) gameOver()
     }
@@ -725,6 +777,10 @@ class GameWorld(private val context: Context) {
     fun togglePerspective() {
         perspectiveEnabled = !perspectiveEnabled
         gameData.perspectiveEnabled = perspectiveEnabled
+    }
+    fun toggleOrientation() {
+        orientationPortrait = !orientationPortrait
+        gameData.orientationPortrait = orientationPortrait
     }
 
     fun release() { soundManager?.release() }
