@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="road_dark">#FF2D2D2D</color>
+    <color name="road_shoulder">#FF4A4A4A</color>
+    <color name="grass_green">#FF2E7D32</color>
+    <color name="grass_light">#FF43A047</color>
+    <color name="lane_marking">#FFFFFFFF</color>
+    <color name="coin_gold">#FFFFD700</color>
+    <color name="hud_bg">#CC000000</color>
+    <color name="score_text">#FFFFFFFF</color>
+    <color name="health_red">#FFEF5350</color>
+    <color name="health_green">#FF66BB6A</color>
+    <color name="boost_blue">#FF42A5F5</color>
+    <color name="shield_cyan">#FF00E5FF</color>
+</resources>
